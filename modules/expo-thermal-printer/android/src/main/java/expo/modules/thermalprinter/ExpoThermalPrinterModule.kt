@@ -117,13 +117,22 @@ class ExpoThermalPrinterModule : Module() {
                     bitmap = null // Já foi reciclado pelo sliceImage
                     Log.d(TAG, "✓ Imagem fatiada em ${slices.size} partes")
                     
-                    // Imprime cada fatia sequencialmente
+                    // Imprime cada fatia usando RAW BYTES (Padrão RawBT)
                     printWithRetry(paperWidth, dpi) { printer ->
-                        slices.forEachIndexed { index, slice ->
-                            Log.d(TAG, "Imprimindo fatia ${index + 1}/${slices.size} (${slice.width}x${slice.height}px)...")
-                            val imageString = PrinterTextParserImg.bitmapToHexadecimalString(printer, slice)
-                            printer.printFormattedText("[C]<img>$imageString</img>\n")
+                        Log.d(TAG, "🚀 Usando motor RAW de alta fidelidade (padrão RawBT)")
+                        
+                        if (currentConnection == null) {
+                            throw Exception("Conexão com impressora não disponível")
                         }
+                        
+                        RawImagePrinter.printBitmapSlices(
+                            connection = currentConnection!!,
+                            slices = slices,
+                            centered = true,
+                            feedLinesBetweenSlices = 0,
+                            feedLinesAfterLast = 3
+                        )
+                        
                         Log.d(TAG, "✓ Todas as fatias impressas com sucesso!")
                     }
                 } else {
@@ -132,11 +141,20 @@ class ExpoThermalPrinterModule : Module() {
                     Log.d(TAG, "Imagem pequena (${finalBitmap.height}px). Imprimindo de uma vez...")
                     
                     printWithRetry(paperWidth, dpi) { printer ->
-                        Log.d(TAG, "Convertendo bitmap para comandos ESC/POS...")
-                        val imageString = PrinterTextParserImg.bitmapToHexadecimalString(printer, finalBitmap)
-                        Log.d(TAG, "Bitmap convertido para hexadecimal (${imageString.length} caracteres)")
+                        Log.d(TAG, "🚀 Usando motor RAW de alta fidelidade (padrão RawBT)")
+                        Log.d(TAG, "Tamanho estimado: ${RawImagePrinter.estimateRawBytesSize(finalBitmap)} bytes")
                         
-                        printer.printFormattedText("[C]<img>$imageString</img>\n\n\n")
+                        if (currentConnection == null) {
+                            throw Exception("Conexão com impressora não disponível")
+                        }
+                        
+                        RawImagePrinter.printBitmapDirectly(
+                            connection = currentConnection!!,
+                            bitmap = finalBitmap,
+                            centered = true,
+                            feedLines = 3
+                        )
+                        
                         Log.d(TAG, "✓ Impressão concluída com sucesso!")
                     }
                 }
@@ -609,14 +627,32 @@ class ExpoThermalPrinterModule : Module() {
                 
                 originalBitmap.recycle()
                 
-                Log.d(TAG, "Convertendo para comandos ESC/POS...")
-                val imageHex = PrinterTextParserImg.bitmapToHexadecimalString(printer, processedBitmap)
+                Log.d(TAG, "🚀 Usando motor RAW de alta fidelidade (padrão RawBT)")
+                Log.d(TAG, "Tamanho estimado: ${RawImagePrinter.estimateRawBytesSize(processedBitmap)} bytes")
                 
-                Log.d(TAG, "Imprimindo imagem de teste...")
+                if (currentConnection == null) {
+                    promise.reject("NO_CONNECTION", "Conexão com impressora não disponível", null)
+                    return@AsyncFunction
+                }
+                
+                // Imprime cabeçalho
                 printer.printFormattedText(
                     "[C]<b>TESTE DE IMAGEM HARDCODED</b>\n" +
                     "[C]Imagem Base64 interna do Kotlin\n" +
-                    "[C]<img>$imageHex</img>\n" +
+                    "[C]Motor RAW (Padrão RawBT)\n\n"
+                )
+                
+                // Imprime imagem usando RAW BYTES
+                Log.d(TAG, "Imprimindo imagem de teste com RAW bytes...")
+                RawImagePrinter.printBitmapDirectly(
+                    connection = currentConnection!!,
+                    bitmap = processedBitmap,
+                    centered = true,
+                    feedLines = 2
+                )
+                
+                // Imprime rodapé
+                printer.printFormattedText(
                     "[C]Se isso imprimiu, o Kotlin está OK!\n" +
                     "[C]O problema está na comunicação RN→Kotlin\n\n\n"
                 )

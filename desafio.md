@@ -1,316 +1,115 @@
+O Gemini disse
+Felipe, analisando o cenário e a sua referência ao RawBT (que é o padrão ouro para impressão térmica no Android), o problema que você está enfrentando com a imagem saindo ilegível ou manchada não está no envio da Base64 nem na conexão.
 
+O problema está na Geração do Array Hexadecimal (Comandos ESC/POS) para imagens na biblioteca DantSu.
 
-Agora imprimiu o cupom de restaurante 
+O Diagnóstico: Por que o RawBT é perfeito e a DantSu falha?
+O seu código Kotlin faz o Dithering Floyd-Steinberg perfeitamente. Ele transforma a imagem em pixels 100% pretos ou 100% brancos.
+O gargalo acontece nesta linha exata do seu código:
 
-um garnde avanca 
+Kotlin
+// O GARGALO ESTÁ AQUI:
+val imageString = PrinterTextParserImg.bitmapToHexadecimalString(printer, processedBitmap)
+A biblioteca DantSu usa um algoritmo interno de conversão de imagens para ESC/POS que é antigo e não otimizado para o padrão GS v 0 (o comando mais moderno e rápido para imagens, usado pelo RawBT). A DantSu tenta adivinhar os tons de cinza de novo, bagunçando o Dithering perfeito que o seu ImageUtils.kt fez.
 
-a imagem base64 imrpimiu um testo dizendoq ue nao era erro no kotlin e sim na comunicacao do RN com o kotlin so que nao imprimiu a imagem o serto nao era ele pegar essa imagem base64 fazer aquele lance das cores e imprimir a imagem em si?
+A Solução: Escrever o Comando Gráfico na Mão (Nível Sênior)
+Para igualar a qualidade do RawBT, não podemos confiar no PrinterTextParserImg da DantSu. Nós precisamos pegar a sua imagem convertida em preto e branco e injetar os "Bytes Brutos" (Raw Bytes) direto na porta da impressora, usando o comando oficial da Epson para rasterização de bitmaps: O comando GS v 0.
 
-Essee  o primiro coisa a ser resolvido imprimir a imagem deveria fazer o fluxo competo ate imprimir a imagem dentro dos padros e margem denifinos
+Eu escrevi uma função em Kotlin que faz exatamente o que o motor do RawBT faz. Ela lê o seu Bitmap (que já está em Dithering), converte para uma matriz de bits agrupados de 8 em 8, e envia para o hardware.
 
+Passo 1: Adicione esta nova função privada no seu ExpoThermalPrinterModule.kt
+Cole este bloco de código no final do seu arquivo, antes da última chave }:
 
-2 ponto e criar um template no react native e mandar par ala para imprimir
+Kotlin
+    /**
+     * Motor de Impressão de Imagem Alta Fidelidade (Padrão RawBT)
+     * Utiliza o comando ESC/POS 'GS v 0' para rasterização direta de bits.
+     * Ignora o parser da DantSu para evitar perda de qualidade no Dithering.
+     */
+    private fun printBitmapDirectly(printer: EscPosPrinter, bitmap: Bitmap) {
+        val width = bitmap.width
+        val height = bitmap.height
 
-o template e esse converta para react antive e envie para o kotlin o ESC/POS para imprimir o bilhete 
+        // Calcula os bytes. Cada byte guarda 8 pixels (1 bit por pixel)
+        val xBytes = (width + 7) / 8
+        
+        // O comando mágico ESC/POS GS v 0
+        // 0x1D (GS), 0x76 (v), 0x30 (0), 0x00 (modo normal)
+        val command = byteArrayOf(
+            0x1D.toByte(), 0x76.toByte(), 0x30.toByte(), 0x00.toByte(),
+            (xBytes % 256).toByte(), (xBytes / 256).toByte(), // Largura (LowL, LowH)
+            (height % 256).toByte(), (height / 256).toByte()  // Altura (LowL, LowH)
+        )
 
-<!DOCTYPE html>
-<html lang="pt-BR">
+        // Array para guardar os pixels convertidos em bits
+        val imageData = ByteArray(xBytes * height)
 
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Bilhete - Reino da Sorte</title>
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                // Se o pixel não for 100% branco (ou transparente), vira um ponto preto na impressora
+                val pixel = bitmap.getPixel(x, y)
+                // Usando o canal vermelho como referência (já que a imagem passou por dithering P/B)
+                val isBlack = android.graphics.Color.red(pixel) < 128 || android.graphics.Color.alpha(pixel) < 128
 
-    <!-- Tailwind CSS para o layout flexível e espaçamentos -->
-    <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://unpkg.com/lucide@latest"></script>
-
-    <!-- 1. IMPORTAÇÕES OBRIGATÓRIAS -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
-    <!-- Biblioteca de QR Code -->
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
-    <script src="ThermalPrinterWeb.js"></script>
-
-    <style>
-        /* Fonte do título para ficar idêntico à imagem */
-        @import url('https://fonts.googleapis.com/css2?family=PT+Serif:wght@700&display=swap');
-
-        body {
-            background-color: #e2e8f0;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            min-height: 100vh;
-            padding: 2rem;
-            font-family: Arial, Helvetica, sans-serif;
-            color: #000;
-        }
-
-        /* 
-        ==================================================================
-        CSS DO BILHETE (REGRA DE OURO DA IMPRESSORA)
-        ==================================================================
-        */
-        .area-de-impressao {
-            width: 384px;
-            /* LARGURA FIXA E ABSOLUTA (58mm) */
-            background: #ffffff !important;
-            color: #000000 !important;
-            padding: 6px;
-            /* Diminuído para aproveitar as bordas */
-            box-sizing: border-box;
-            border: 1px solid #ccc;
-            /* Só para ver na tela */
-        }
-
-        /* Força que tudo dentro do bilhete seja P&B puro */
-        .area-de-impressao * {
-            color: #000000 !important;
-            border-color: #000000 !important;
-            background-color: transparent;
-        }
-
-        .title-font {
-            font-family: 'PT Serif', serif;
-        }
-
-        /* Estilos específicos das linhas tracejadas do bilhete */
-        .dashed-box {
-            border: 2px dashed #000;
-            margin-top: 10px;
-        }
-
-        .dashed-line {
-            border-top: 2px dashed #000;
-        }
-
-        /* Força QR Code puro P&B sem anti-aliasing */
-        #qrcode img {
-            image-rendering: pixelated;
-            margin: 0 auto;
-        }
-
-        /* Estilos do Painel de Controle na Web (Não imprime) */
-        .painel-controle {
-            background: white;
-            padding: 20px;
-            border-radius: 12px;
-            width: 100%;
-            max-width: 384px;
-            margin-bottom: 20px;
-            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
-        }
-
-        .btn {
-            width: 100%;
-            padding: 15px;
-            margin: 5px 0;
-            font-weight: bold;
-            border-radius: 8px;
-            border: none;
-            cursor: pointer;
-            font-size: 16px;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .btn-conectar {
-            background: #1e293b;
-            color: white;
-        }
-
-        .btn-imprimir {
-            background: #2563eb;
-            color: white;
-        }
-
-        .btn-imprimir:disabled {
-            background: #94a3b8;
-            cursor: not-allowed;
-        }
-    </style>
-</head>
-
-<body>
-
-    <!-- PAINEL DE CONTROLE WEB -->
-    <div class="painel-controle">
-        <h2 style="margin-top:0; font-family: 'Arial', sans-serif;" class="font-bold flex items-center gap-2">
-            <i data-lucide="settings"></i> Controle de Impressão
-        </h2>
-        <p class="text-sm my-2">Status: <strong id="status-texto" style="color: red;">Desconectado</strong></p>
-        <button id="btn-conectar" class="btn btn-conectar">
-            <i data-lucide="bluetooth"></i> Conectar Impressora
-        </button>
-        <button id="btn-imprimir" class="btn btn-imprimir" disabled>
-            <i data-lucide="printer"></i> IMPRIMIR BILHETE
-        </button>
-    </div>
-
-    <!-- CONTAINER DO BILHETE (Exatos 384px) -->
-    <div id="ticket-area" class="area-de-impressao text-[18px] leading-[1.25] font-bold">
-
-        <!-- Cabeçalho -->
-        <div class="text-center mb-3 mt-1">
-            <h1 class="title-font text-[32px] font-black uppercase tracking-wide mb-1 text-black">Reino da Sorte</h1>
-            <div class="flex items-center justify-center gap-2 text-[16px] text-black font-black">
-                <span class="w-8 border-t-[3px] border-black"></span>
-                <span class="uppercase tracking-widest">Jardim – Ceará</span>
-                <span class="w-8 border-t-[3px] border-black"></span>
-            </div>
-        </div>
-
-        <!-- Caixa Tracejada Principal -->
-        <div class="dashed-box flex flex-col text-black">
-
-            <!-- Secção Prêmio -->
-            <div class="p-2">
-                <p>PRÊMIO: FIAT UNO 2013, MAIS 15</p>
-                <p>GIROS DE R$ 500,00.</p>
-            </div>
-
-            <div class="dashed-line"></div>
-
-            <!-- Secção Datas -->
-            <div class="p-2">
-                <p>DATA DO SORTEIO: 28/02/2026</p>
-                <p>DATA DA VENDA: 28/02/2026 08:12</p>
-            </div>
-
-            <div class="dashed-line"></div>
-
-            <!-- Secção Cliente -->
-            <div class="p-2 text-[20px]">
-                <p>CLIENTE: <span class="font-black">Felipe Morreira</span></p>
-                <p>TELEFONE: <span class="font-black">+55 (87)9 9159-1859</span></p>
-            </div>
-
-            <div class="dashed-line"></div>
-
-            <!-- Secção Números da Sorte -->
-            <div class="p-2 pb-3">
-                <p class="text-center mb-2 font-black text-[20px]">NÚMEROS DA SORTE:</p>
-                <div class="grid grid-cols-2 text-center text-[24px] gap-y-1 font-black tracking-widest">
-                    <span>425242</span><span>319201</span>
-                    <span>683165</span><span>364418</span>
-                    <span>490819</span><span>703627</span>
-                    <span>565632</span><span>701317</span>
-                    <span>119099</span><span>403894</span>
-                    <span>425242</span><span>319201</span>
-                    <span>683165</span><span>364418</span>
-                    <span>490819</span><span>703627</span>
-                    <span>565632</span><span>701317</span>
-                    <span>119099</span><span>403894</span>
-                </div>
-            </div>
-
-            <div class="dashed-line"></div>
-
-            <!-- Secção Vendedor -->
-            <div class="p-2 text-center">
-                <p>VENDEDOR: Banca Enfrente a Zaza</p>
-                <p class="font-black text-[20px]">(87)9 9209-0279</p>
-            </div>
-
-            <div class="dashed-line"></div>
-
-            <!-- Secção QR Code e Rodapé da Caixa (NOVO LAYOUT CENTRALIZADO) -->
-            <div class="p-3 flex flex-col items-center justify-center gap-3">
-                <!-- QR Code Dinâmico MAIOR -->
-                <div class="bg-white p-2">
-                    <div id="qrcode"></div>
-                </div>
-
-                <!-- Frase de Prazo -->
-                <p class="text-[14px] text-center leading-tight font-black uppercase max-w-[90%]">
-                    Prazo para o ganhador se apresentar até as 09H do dia seguinte
-                </p>
-            </div>
-
-            <div class="border-t-[3px] border-black w-full"></div>
-
-            <!-- Numero no final da caixa -->
-            <div class="p-2 text-center">
-                <p class="text-[20px] font-black">Nº 006.326-7</p>
-            </div>
-
-        </div>
-
-        <!-- Rodapé Externo (Redes Sociais e Contato) -->
-        <div class="text-center mt-3 text-[18px] pb-1 text-black font-black">
-            <p>Instagram: @reinodasorteoficial</p>
-            <p>Escritório: (88) 98807-2177</p>
-        </div>
-
-    </div>
-
-    <!-- LÓGICA DE IMPRESSÃO (THERMAL PRINTER WEB) -->
-    <script>
-        lucide.createIcons();
-
-        // 1. Gerar o QR Code apontando para o site desejado (TAMANHO AUMENTADO)
-        new QRCode(document.getElementById("qrcode"), {
-            text: "https://reinodasorte.com.br",
-            width: 140, // Tamanho bastante aumentado para facilitar leitura
-            height: 140,
-            colorDark: "#000000",
-            colorLight: "#ffffff",
-            correctLevel: QRCode.CorrectLevel.M // Nível médio de correção para leitura fácil em térmica
-        });
-
-        // 2. Lógica da Impressora
-        const printer = new ThermalPrinterWeb({
-            width: 384, // Regra da impressora 58mm
-            onConnect: (nome) => {
-                document.getElementById('status-texto').innerText = nome || 'Conectado';
-                document.getElementById('status-texto').style.color = 'green';
-                document.getElementById('btn-imprimir').disabled = false;
-                document.getElementById('btn-conectar').style.display = 'none';
-            },
-            onDisconnect: () => {
-                document.getElementById('status-texto').innerText = 'Desconectado';
-                document.getElementById('status-texto').style.color = 'red';
-                document.getElementById('btn-imprimir').disabled = true;
-                document.getElementById('btn-conectar').style.display = 'flex';
+                if (isBlack) {
+                    // Liga o bit correspondente dentro do byte
+                    val byteIndex = y * xBytes + x / 8
+                    val bitOffset = 7 - (x % 8)
+                    imageData[byteIndex] = (imageData[byteIndex].toInt() or (1 shl bitOffset)).toByte()
+                }
             }
-        });
+        }
 
-        document.getElementById('btn-conectar').addEventListener('click', async () => {
-            try {
-                document.getElementById('btn-conectar').innerHTML = '<i data-lucide="loader-2" class="animate-spin"></i> Conectando...';
-                lucide.createIcons();
-                await printer.connect();
-            } catch (e) {
-                alert("Erro: " + e.message);
-                document.getElementById('btn-conectar').innerHTML = '<i data-lucide="bluetooth"></i> Conectar Impressora';
-                lucide.createIcons();
-            }
-        });
+        // Pula algumas linhas antes para alinhar
+        printer.printFormattedText("\n")
 
-        document.getElementById('btn-imprimir').addEventListener('click', async () => {
-            const btn = document.getElementById('btn-imprimir');
-            const originalHtml = btn.innerHTML;
+        // Manda o comando e os dados puros (Raw) direto para o Socket da impressora
+        currentConnection?.write(command)
+        currentConnection?.write(imageData)
 
-            btn.disabled = true;
-            btn.innerHTML = '<i data-lucide="loader-2" class="animate-spin"></i> PROCESSANDO...';
-            lucide.createIcons();
+        // Pula linhas e corta o papel
+        printer.printFormattedText("\n\n\n")
+    }
+Passo 2: Substitua a chamada no seu printImage e printTestImage
+Agora, volte nas suas funções onde a imagem é impressa e troque o "jeito velho" pelo nosso novo motor.
 
-            try {
-                // Manda a div do bilhete para o nosso motor ThermalPrinterWeb
-                await printer.printHtml('#ticket-area');
-            } catch (e) {
-                alert("Erro ao imprimir: " + e.message);
-            } finally {
-                btn.disabled = false;
-                btn.innerHTML = originalHtml;
-                lucide.createIcons();
-            }
-        });
-    </script>
-</body>
+No printImage:
 
-</html>
+Substitua este bloco:
 
+Kotlin
+// APAGUE ISTO:
+printWithRetry(paperWidth, dpi) { printer ->
+    Log.d(TAG, "Convertendo bitmap para comandos ESC/POS...")
+    val imageString = PrinterTextParserImg.bitmapToHexadecimalString(printer, finalBitmap)
+    printer.printFormattedText("[C]<img>$imageString</img>\n\n\n")
+}
+Por isto:
 
+Kotlin
+// COLOQUE ISTO:
+printWithRetry(paperWidth, dpi) { printer ->
+    Log.d(TAG, "Enviando pixels brutos para a impressora (Padrão RawBT)...")
+    // Centralizar (Comando ESC a 1)
+    currentConnection?.write(byteArrayOf(0x1B, 0x61, 0x01)) 
+    
+    // Imprime com fidelidade
+    printBitmapDirectly(printer, finalBitmap)
+    
+    // Volta a alinhar à esquerda (Comando ESC a 0)
+    currentConnection?.write(byteArrayOf(0x1B, 0x61, 0x00))
+}
+E se você estiver usando o fatiador de imagem (enableSlicing), mude o forEachIndexed também:
+
+Kotlin
+slices.forEachIndexed { index, slice ->
+    Log.d(TAG, "Imprimindo fatia ${index + 1}/${slices.size}...")
+    currentConnection?.write(byteArrayOf(0x1B, 0x61, 0x01)) // Centraliza
+    printBitmapDirectly(printer, slice)
+}
+O que acontece agora?
+Em vez de pedir para a DantSu "formatar" uma imagem em um texto hexadecimal (que gasta muita CPU e perde qualidade na Moderninha), você está pegando o seu Bitmap do Android e jogando a "tinta térmica" diretamente nas agulhas da impressora. Onde for bit 1, queima; onde for 0, ignora.
+
+Isso é o verdadeiro "baixo nível". É exatamente assim que os apps profissionais de PDV fazem para imprimir logotipos nítidos e QR Codes sem borrões.
+
+Pode compilar! O seu Dithering (no ImageUtils) vai continuar fazendo a arte, e essa nova função vai garantir a entrega física sem intermediários. Vai sair igual ou melhor que o RawBT.

@@ -68,15 +68,18 @@ class ExpoThermalPrinterModule : Module() {
          */
         AsyncFunction("printImage") { base64Image: String, options: Map<String, Any>, promise: Promise ->
             var bitmap: Bitmap? = null
+            val slices = mutableListOf<Bitmap>()
             try {
-                Log.d(TAG, "Iniciando processo de impressão de imagem...")
+                Log.d(TAG, "=== INICIANDO IMPRESSÃO DE IMAGEM ===")
                 
-                // Extrai opções
                 val paperWidth = (options["paperWidth"] as? Int) ?: 58
                 val dpi = (options["dpi"] as? Int) ?: DEFAULT_DPI
                 val applyDithering = (options["applyDithering"] as? Boolean) ?: true
+                val useThreshold = (options["useThreshold"] as? Boolean) ?: false
+                val enableSlicing = (options["enableSlicing"] as? Boolean) ?: true
+                val maxSliceHeight = (options["maxSliceHeight"] as? Int) ?: 400
                 
-                Log.d(TAG, "Configurações: paperWidth=$paperWidth mm, dpi=$dpi, dithering=$applyDithering")
+                Log.d(TAG, "Configurações: paperWidth=$paperWidth mm, dpi=$dpi, dithering=$applyDithering, threshold=$useThreshold, slicing=$enableSlicing")
                 
                 // Decodifica Base64 para Bitmap
                 Log.d(TAG, "Decodificando imagem Base64...")
@@ -96,30 +99,46 @@ class ExpoThermalPrinterModule : Module() {
                 bitmap = ImageUtils.resizeForPrinter(bitmap, paperWidth)
                 Log.d(TAG, "Imagem redimensionada: ${bitmap.width}x${bitmap.height} pixels")
                 
-                // Aplica dithering se solicitado
-                if (applyDithering) {
-                    Log.d(TAG, "Aplicando algoritmo Floyd-Steinberg...")
+                // Aplica processamento de imagem (threshold OU dithering)
+                if (useThreshold) {
+                    Log.d(TAG, "Aplicando threshold (ideal para QR codes e textos)...")
+                    bitmap = ImageUtils.applyThreshold(bitmap)
+                    Log.d(TAG, "Threshold aplicado com sucesso")
+                } else if (applyDithering) {
+                    Log.d(TAG, "Aplicando algoritmo Floyd-Steinberg (ideal para fotos)...")
                     bitmap = ImageUtils.applyFloydSteinbergDithering(bitmap)
                     Log.d(TAG, "Dithering aplicado com sucesso")
                 }
                 
-                // Captura bitmap final para uso no retry
-                val finalBitmap = bitmap
-                
-                // Usa printWithRetry para auto-recover de Doze Mode
-                printWithRetry(paperWidth, dpi) { printer ->
-                    Log.d(TAG, "Convertendo bitmap para comandos ESC/POS...")
-                    Log.d(TAG, "Dimensões finais do bitmap: ${finalBitmap.width}x${finalBitmap.height}")
+                // Verifica se precisa fatiar a imagem (anti buffer overflow)
+                if (enableSlicing && bitmap.height > maxSliceHeight) {
+                    Log.d(TAG, "⚠ Imagem grande detectada (${bitmap.height}px). Fatiando em pedaços de ${maxSliceHeight}px...")
+                    slices.addAll(ImageUtils.sliceImage(bitmap, maxSliceHeight))
+                    bitmap = null // Já foi reciclado pelo sliceImage
+                    Log.d(TAG, "✓ Imagem fatiada em ${slices.size} partes")
                     
-                    val imageString = PrinterTextParserImg.bitmapToHexadecimalString(printer, finalBitmap)
-                    Log.d(TAG, "Bitmap convertido para hexadecimal (${imageString.length} caracteres)")
+                    // Imprime cada fatia sequencialmente
+                    printWithRetry(paperWidth, dpi) { printer ->
+                        slices.forEachIndexed { index, slice ->
+                            Log.d(TAG, "Imprimindo fatia ${index + 1}/${slices.size} (${slice.width}x${slice.height}px)...")
+                            val imageString = PrinterTextParserImg.bitmapToHexadecimalString(printer, slice)
+                            printer.printFormattedText("[C]<img>$imageString</img>\n")
+                        }
+                        Log.d(TAG, "✓ Todas as fatias impressas com sucesso!")
+                    }
+                } else {
+                    // Imagem pequena - imprime de uma vez
+                    val finalBitmap = bitmap!!
+                    Log.d(TAG, "Imagem pequena (${finalBitmap.height}px). Imprimindo de uma vez...")
                     
-                    // Imprime a imagem centralizada
-                    printer.printFormattedText(
-                        "[C]<img>$imageString</img>\n\n\n"
-                    )
-                    
-                    Log.d(TAG, "Impressão de imagem concluída com sucesso!")
+                    printWithRetry(paperWidth, dpi) { printer ->
+                        Log.d(TAG, "Convertendo bitmap para comandos ESC/POS...")
+                        val imageString = PrinterTextParserImg.bitmapToHexadecimalString(printer, finalBitmap)
+                        Log.d(TAG, "Bitmap convertido para hexadecimal (${imageString.length} caracteres)")
+                        
+                        printer.printFormattedText("[C]<img>$imageString</img>\n\n\n")
+                        Log.d(TAG, "✓ Impressão concluída com sucesso!")
+                    }
                 }
                 
                 promise.resolve(
@@ -130,12 +149,14 @@ class ExpoThermalPrinterModule : Module() {
                 )
                 
             } catch (e: Exception) {
-                Log.e(TAG, "Erro durante impressão: ${e.message}", e)
+                Log.e(TAG, "✗ Erro durante impressão: ${e.message}", e)
                 promise.reject("PRINT_ERROR", e.message ?: "Erro desconhecido durante impressão", e)
             } finally {
-                // Libera memória do Bitmap SEMPRE (importante para maquininhas com pouca RAM)
+                // Libera memória SEMPRE (crítico para maquininhas com pouca RAM)
                 bitmap?.recycle()
-                Log.d(TAG, "Memória do Bitmap liberada.")
+                slices.forEach { it.recycle() }
+                slices.clear()
+                Log.d(TAG, "✓ Memória liberada")
             }
         }
         
@@ -578,12 +599,12 @@ class ExpoThermalPrinterModule : Module() {
                 
                 val processedBitmap = if (applyDithering) {
                     Log.d(TAG, "Aplicando dithering Floyd-Steinberg...")
-                    val resized = ImageUtils.resizeForPrinter(originalBitmap, paperWidth, dpi)
+                    val resized = ImageUtils.resizeForPrinter(originalBitmap, paperWidth)
                     val dithered = ImageUtils.applyFloydSteinbergDithering(resized)
                     resized.recycle()
                     dithered
                 } else {
-                    ImageUtils.resizeForPrinter(originalBitmap, paperWidth, dpi)
+                    ImageUtils.resizeForPrinter(originalBitmap, paperWidth)
                 }
                 
                 originalBitmap.recycle()
@@ -650,26 +671,78 @@ class ExpoThermalPrinterModule : Module() {
      */
     private fun getOrCreatePrinter(paperWidth: Int, dpi: Int): EscPosPrinter? {
         try {
-            // Se já temos a impressora pronta e conectada, apenas devolve ela!
-            if (currentPrinter != null) {
-                Log.d(TAG, "Reutilizando impressora já conectada")
-                return currentPrinter
+            // ==========================================
+            // SOCKET RETRY LOGIC (AUTO-RECOVER)
+            // ==========================================
+            // Se já temos impressora, verifica se o socket ainda está vivo
+            if (currentPrinter != null && currentConnection != null) {
+                try {
+                    // Testa se a conexão ainda está ativa
+                    if (currentConnection!!.isConnected) {
+                        Log.d(TAG, "✓ Reutilizando impressora já conectada")
+                        return currentPrinter
+                    } else {
+                        Log.w(TAG, "⚠ Socket detectado como desconectado. Tentando reconectar...")
+                        
+                        // Tenta reconectar o socket existente
+                        try {
+                            currentConnection!!.connect()
+                            Log.d(TAG, "✓ Socket reconectado com sucesso!")
+                            return currentPrinter
+                        } catch (reconnectError: Exception) {
+                            Log.e(TAG, "✗ Falha ao reconectar. Limpando conexão antiga...", reconnectError)
+                            // Limpa conexão quebrada
+                            try {
+                                currentConnection?.disconnect()
+                            } catch (ignored: Exception) {}
+                            currentConnection = null
+                            currentPrinter = null
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "⚠ Erro ao verificar status do socket. Recriando conexão...", e)
+                    // Limpa estado inconsistente
+                    try {
+                        currentConnection?.disconnect()
+                    } catch (ignored: Exception) {}
+                    currentConnection = null
+                    currentPrinter = null
+                }
             }
             
+            // ==========================================
+            // AUTO-DETECT E CRIAÇÃO DE NOVA CONEXÃO
+            // ==========================================
             Log.d(TAG, "Nenhuma impressora ativa. Tentando auto-detectar...")
             val connection = findAnyAvailablePrinter()
             
             if (connection == null) {
-                Log.w(TAG, "Auto-detect falhou.")
+                Log.w(TAG, "✗ Auto-detect falhou.")
                 return null
             }
             
-            // Se achou no auto-detect, TEM QUE CONECTAR O SOCKET AQUI TAMBÉM
-            try {
-                connection.connect()
-                Log.d(TAG, "Socket auto-detect aberto com sucesso!")
-            } catch (e: Exception) {
-                Log.e(TAG, "Falha ao abrir porta no auto-detect", e)
+            // Conecta o socket com retry (até 2 tentativas)
+            var connectAttempts = 0
+            val maxAttempts = 2
+            var connected = false
+            
+            while (connectAttempts < maxAttempts && !connected) {
+                try {
+                    connectAttempts++
+                    Log.d(TAG, "Tentativa $connectAttempts/$maxAttempts de conectar socket...")
+                    connection.connect()
+                    connected = true
+                    Log.d(TAG, "✓ Socket conectado com sucesso!")
+                } catch (e: Exception) {
+                    Log.e(TAG, "✗ Falha na tentativa $connectAttempts: ${e.message}", e)
+                    if (connectAttempts < maxAttempts) {
+                        Thread.sleep(500) // Aguarda 500ms antes de retry
+                    }
+                }
+            }
+            
+            if (!connected) {
+                Log.e(TAG, "✗ Falha ao conectar após $maxAttempts tentativas")
                 return null
             }
             
@@ -681,10 +754,11 @@ class ExpoThermalPrinterModule : Module() {
             currentConnection = connection
             currentPrinter = printer
             
+            Log.d(TAG, "✓ Impressora criada e pronta para uso")
             return printer
             
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ao resgatar printer: ${e.message}", e)
+            Log.e(TAG, "✗ Erro crítico ao obter printer: ${e.message}", e)
             return null
         }
     }

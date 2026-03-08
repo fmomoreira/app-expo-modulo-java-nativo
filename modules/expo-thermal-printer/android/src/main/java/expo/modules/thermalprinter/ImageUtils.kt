@@ -175,4 +175,79 @@ object ImageUtils {
         
         return bitmap
     }
+    
+    /**
+     * Aplica threshold simples (binarização) sem dithering
+     * IDEAL PARA: QR Codes, códigos de barras, textos puros
+     * 
+     * Diferente do Floyd-Steinberg, este método mantém bordas nítidas e não
+     * cria padrões de pontilhado. Perfeito para conteúdo que precisa ser
+     * escaneado por leitores laser ou câmeras de celular.
+     * 
+     * @param source Bitmap original
+     * @param threshold Limiar de binarização (0-255). Padrão: 128
+     * @return Bitmap em preto e branco puro com bordas nítidas
+     */
+    fun applyThreshold(source: Bitmap, threshold: Int = 128): Bitmap {
+        val width = source.width
+        val height = source.height
+        
+        // Cria cópia mutável
+        val bitmap = source.copy(Bitmap.Config.ARGB_8888, true)
+        
+        // Libera original para economizar RAM
+        if (bitmap != source) {
+            source.recycle()
+        }
+        
+        // Aplica threshold simples: pixel < threshold = preto, senão branco
+        for (y in 0 until height) {
+            for (x in 0 until width) {
+                val pixel = bitmap.getPixel(x, y)
+                val luminance = calculateLuminance(pixel)
+                
+                // Binarização simples sem distribuição de erro
+                val color = if (luminance < threshold) Color.BLACK else Color.WHITE
+                bitmap.setPixel(x, y, color)
+            }
+        }
+        
+        return bitmap
+    }
+    
+    /**
+     * Fatia imagem grande em pedaços menores para evitar buffer overflow
+     * CRÍTICO: Impressoras térmicas têm buffer limitado (~64KB típico)
+     * 
+     * @param source Bitmap original
+     * @param maxHeight Altura máxima de cada fatia em pixels (padrão: 400)
+     * @return Lista de bitmaps fatiados
+     */
+    fun sliceImage(source: Bitmap, maxHeight: Int = 400): List<Bitmap> {
+        val slices = mutableListOf<Bitmap>()
+        val width = source.width
+        val height = source.height
+        
+        // Se a imagem é pequena, retorna ela inteira
+        if (height <= maxHeight) {
+            return listOf(source)
+        }
+        
+        // Calcula quantas fatias serão necessárias
+        val numSlices = (height + maxHeight - 1) / maxHeight
+        
+        for (i in 0 until numSlices) {
+            val startY = i * maxHeight
+            val sliceHeight = min(maxHeight, height - startY)
+            
+            // Cria bitmap da fatia
+            val slice = Bitmap.createBitmap(source, 0, startY, width, sliceHeight)
+            slices.add(slice)
+        }
+        
+        // Libera bitmap original após fatiar
+        source.recycle()
+        
+        return slices
+    }
 }

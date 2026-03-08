@@ -1,8 +1,11 @@
 package expo.modules.thermalprinter
 
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.util.Base64
 import android.util.Log
@@ -265,8 +268,28 @@ class ExpoThermalPrinterModule : Module() {
                         val usbConnections = UsbPrintersConnections(context).list ?: emptyArray()
                         val deviceId = address.removePrefix("usb_").toIntOrNull()
                         
-                        connection = usbConnections.find { it.device.deviceId == deviceId }
-                        printerName = connection?.device?.deviceName ?: "USB Printer"
+                        val usbConn = usbConnections.find { it.device.deviceId == deviceId }
+                        
+                        if (usbConn != null) {
+                            // Solicita permissão USB se necessário
+                            val device = usbConn.device
+                            if (!usbManager.hasPermission(device)) {
+                                Log.d(TAG, "Solicitando permissão USB...")
+                                val permissionIntent = PendingIntent.getBroadcast(
+                                    context,
+                                    0,
+                                    Intent("com.android.example.USB_PERMISSION"),
+                                    PendingIntent.FLAG_IMMUTABLE
+                                )
+                                usbManager.requestPermission(device, permissionIntent)
+                                
+                                // Aguarda um pouco para permissão ser concedida
+                                Thread.sleep(1000)
+                            }
+                            
+                            connection = usbConn
+                            printerName = device.deviceName ?: "USB Printer"
+                        }
                     }
                 } 
                 // Bluetooth
@@ -436,7 +459,24 @@ class ExpoThermalPrinterModule : Module() {
                     
                     if (!usbConnections.isNullOrEmpty()) {
                         val usbPrinter = usbConnections.first()
-                        Log.d(TAG, "✓ USB encontrado: ${usbPrinter.device.deviceName}")
+                        val device = usbPrinter.device
+                        
+                        // Solicita permissão USB se necessário
+                        if (!usbManager.hasPermission(device)) {
+                            Log.d(TAG, "Solicitando permissão USB para auto-detect...")
+                            val permissionIntent = PendingIntent.getBroadcast(
+                                context,
+                                0,
+                                Intent("com.android.example.USB_PERMISSION"),
+                                PendingIntent.FLAG_IMMUTABLE
+                            )
+                            usbManager.requestPermission(device, permissionIntent)
+                            
+                            // Aguarda permissão
+                            Thread.sleep(1000)
+                        }
+                        
+                        Log.d(TAG, "✓ USB encontrado: ${device.deviceName}")
                         currentConnection = usbPrinter
                         return usbPrinter
                     }

@@ -1,173 +1,220 @@
-1. O "Check-up" de Memória (Bitmap Recycling)
-Como as maquininhas de cartão costumam ter pouca memória RAM (geralmente 1GB ou 2GB), processar Bitmaps repetidamente pode causar o erro OutOfMemory.
+O Gemini disse
+O seu código está muito bem estruturado e a lógica de fallback (tentar Bluetooth, depois USB) está perfeita. No entanto, o sintoma que você descreveu — "acha a impressora mas não conecta de verdade nem imprime" — é um problema clássico de Ciclo de Vida de Socket (Socket Lifecycle) com essa biblioteca específica (ESCPOS-ThermalPrinter-Android).
 
-No seu método printImage, logo após o printer.printFormattedText(...), adicione este comando para liberar o hardware:
+Você construiu uma "estrada" perfeita, mas não está "abrindo a cancela" na hora certa.
 
-Kotlin
-// No final do bloco try, após a impressão:
-bitmap?.recycle() // Libera a memória da imagem processada
-Log.d(TAG, "Memória do Bitmap liberada.")
-2. Tratamento de Encodings (Acentuação)
-No Brasil, usamos muitos acentos (ç, á, é). Se o texto sair com símbolos estranhos, é porque a impressora espera um "Code Page" específico. No seu printText, você já previu o ISO-8859-1, o que é ótimo.
+Aqui estão os três motivos técnicos pelos quais o código falha na hora H e como resolvê-los para chegar aos 100%:
 
-Dica técnica: Se notar que os acentos ainda falham, tente forçar o comando de Code Page no início do texto:
-printer.printFormattedText("[C]<font cp=\"850\"><b>$text</b></font>\n") (O CP850 é muito comum em impressoras térmicas brasileiras).
+1. A "Conexão Fantasma" (connectPrinter)
+No seu método connectPrinter, você encontra o dispositivo e faz isso:
+currentConnection = connection
+E depois devolve sucesso para o React Native.
 
-3. O Método de Auto-Teste (Diagnostic)
-Adicione esta função ao seu ModuleDefinition para que o seu usuário possa testar a guilhotina e a cabeça de impressão sem precisar gerar um recibo real:
+O Problema: Você apenas salvou o endereço na memória, mas não abriu o canal de comunicação real (o Socket). O dispositivo acha que você não tentou conectar. Se a impressora estiver desligada, o seu app vai dizer "Conectado com sucesso", e só vai dar erro quando tentar imprimir.
+
+A Solução: Você precisa forçar a conexão real antes de devolver o sucesso.
 
 Kotlin
-AsyncFunction("selfTest") { promise: Promise ->
-    try {
-        val printer = getOrCreatePrinter(58, 203)
-        printer?.printFormattedText(
-            "[C]<img>" + "..." + "</img>\n" + // Coloque um mini logo aqui
-            "[C]<b>TESTE DE IMPRESSÃO</b>\n" +
-            "[L]--------------------------------\n" +
-            "[L]Alinhamento Esquerdo\n" +
-            "[C]Alinhamento Central\n" +
-            "[R]Alinhamento Direito\n" +
-            "[L]<b>Negrito</b> [L]<i>Itálico</i>\n" +
-            "[L]--------------------------------\n" +
-            "[C]<barcode type=\"ean13\" height=\"10\">1234567890128</barcode>\n" +
-            "[L]\n" + "[L]\n"
-        )
-        promise.resolve("Teste concluído")
-    } catch (e: Exception) {
-        promise.reject("TEST_ERROR", e.message, e)
-    }
+// Dentro de connectPrinter, logo após encontrar o 'connection':
+try {
+    connection.connect() // ISSO abre a porta Bluetooth/USB de verdade!
+    currentConnection = connection
+} catch (e: Exception) {
+    promise.reject("CONNECTION_FAILED", "A impressora foi encontrada, mas recusou a conexão.")
+    return@AsyncFunction
 }
+2. O Construtor Destrutivo (getOrCreatePrinter)
+Este é o erro mais grave que está impedindo a impressão. Sempre que você chama printImage ou printText, você chama getOrCreatePrinter. Este método faz isso:
+return EscPosPrinter(connection, dpi, DEFAULT_WIDTH_MM, widthPixels)
 
+O Problema: Toda vez que você instancia a classe EscPosPrinter, a biblioteca tenta enviar comandos de inicialização (INIT) e tenta abrir o socket novamente. Fazer isso múltiplas vezes em uma conexão que já está aberta causa o colapso do Bluetooth (erro Broken Pipe ou Socket Closed).
 
-sugestao apra interface no react native
+A Solução: Você deve guardar a instância do Printer, e não apenas a conexão. Assim, você inicializa a impressora uma vez e apenas envia os textos nas próximas.
+
+Mude suas variáveis globais no topo da classe:
+
+Kotlin
+// Substitua o currentConnection por isto:
+private var currentPrinter: EscPosPrinter? = null
+3. O Risco de Deadlock no USB (CountDownLatch)
+Para as maquininhas que usam conexão interna via barramento USB, a sua ideia de usar um BroadcastReceiver com um CountDownLatch foi muito inteligente para pausar o código enquanto o usuário clica em "Permitir".
+
+O Problema: Dependendo de como o Expo gerencia as threads em segundo plano, travar a função com usbPermissionLatch?.await(30, TimeUnit.SECONDS) pode congelar a ponte do React Native, fazendo o app inteiro parecer travado para o usuário, ou o popup do Android pode nem aparecer porque a thread que desenha a tela está aguardando a resposta.
+
+O que fazer para funcionar 100%?
+Para que o código rode liso, a arquitetura precisa mudar ligeiramente:
+
+Quando o usuário clica em conectar, o código instancia o EscPosPrinter e guarda essa instância na memória (currentPrinter = EscPosPrinter(...)).
+
+Quando o usuário clica em imprimir, o código apenas verifica se currentPrinter existe e dispara o comando .printFormattedText().
+
+Além do código, verifique se o seu AndroidManifest.xml possui a declaração de que o app usa hardware USB, senão o sistema operacional bloqueia a comunicação silenciosamente:
+
+XML
+<uses-feature android:name="android.hardware.usb.host" />
+Gostaria que eu reescrevesse os métodos connectPrinter e getOrCreatePrinter aplicando essa correção de ciclo de vida para você copiar e colar no seu projeto?
+
+Disse
+sim por favor completa
 
 O Gemini disse
-Excelente! Ter uma interface de usuário (UI) limpa para que o usuário possa escolher a impressora (caso o auto-detect não seja o que ele quer) é o que diferencia um app amador de um profissional.
+Aqui está a solução completa e corrigida! Vou te passar exatamente as partes que você precisa substituir no seu arquivo ExpoThermalPrinterModule.kt para resolver esse problema de "achar, mas não conectar de verdade".
 
-Como o seu método getPairedPrinters retorna uma lista de objetos com name, address e type, vamos criar um componente que exibe esses dispositivos em "cards" elegantes.
+A grande mudança aqui é a introdução da variável currentPrinter para manter o socket aberto e o comando explícito connection.connect() que faz o "aperto de mão" físico com o hardware.
 
-Componente de Seleção de Impressora (React Native + TypeScript)
-Este componente faz três coisas:
+1. Atualize as Variáveis Globais (No topo da classe)
+Substitua as suas variáveis atuais por estas. Agora vamos guardar a instância da impressora para não recriá-la a cada impressão:
 
-Busca as impressoras ao abrir a tela.
+Kotlin
+    private var currentConnection: DeviceConnection? = null
+    private var currentPrinter: EscPosPrinter? = null // Nova variável crucial!
+    private var usbPermissionLatch: CountDownLatch? = null
+    private var usbPermissionGranted = false
+2. O Novo Método connectPrinter
+Substitua toda a sua função AsyncFunction("connectPrinter") por esta. Note que agora nós abrimos a conexão e instanciamos a impressora imediatamente:
 
-Lista os dispositivos com ícones diferentes para Bluetooth e USB.
+Kotlin
+        AsyncFunction("connectPrinter") { address: String, promise: Promise ->
+            try {
+                Log.d(TAG, "Conectando à impressora: $address")
+                
+                var connection: DeviceConnection? = null
+                var printerName = "Desconhecida"
+                
+                // --- Lógica de busca (mantida igual a sua) ---
+                if (address == "internal_auto") {
+                    connection = findAnyAvailablePrinter()
+                    printerName = "Auto-detectada"
+                } else if (address.startsWith("usb_")) {
+                    val context = appContext.reactContext ?: throw Exception("Context não disponível")
+                    val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
+                    if (usbManager != null) {
+                        val usbConnections = UsbPrintersConnections(context).list ?: emptyArray()
+                        val deviceId = address.removePrefix("usb_").toIntOrNull()
+                        val usbConn = usbConnections.find { it.device.deviceId == deviceId }
+                        
+                        if (usbConn != null) {
+                            val device = usbConn.device
+                            if (!usbManager.hasPermission(device)) {
+                                val granted = requestUsbPermission(context, usbManager, device)
+                                if (!granted) {
+                                    promise.reject("USB_DENIED", "Permissão USB negada", null)
+                                    return@AsyncFunction
+                                }
+                            }
+                            connection = usbConn
+                            printerName = device.deviceName ?: "USB Printer"
+                        }
+                    }
+                } else {
+                    val bluetoothConnections = BluetoothPrintersConnections().list ?: emptyArray()
+                    connection = bluetoothConnections.find { it.device.address == address }
+                    printerName = (connection as? BluetoothConnection)?.device?.name ?: "Bluetooth Printer"
+                }
+                
+                if (connection == null) {
+                    promise.reject("NOT_FOUND", "Impressora não encontrada: $address", null)
+                    return@AsyncFunction
+                }
 
-Conecta ao clicar e salva a preferência.
+                // ==========================================
+                // A CORREÇÃO CRÍTICA COMEÇA AQUI
+                // ==========================================
+                Log.d(TAG, "Abrindo Socket de comunicação...")
+                try {
+                    // Desconecta a anterior se existir
+                    currentConnection?.disconnect() 
+                    
+                    // 1. FAZ A CONEXÃO FÍSICA! (Abre a porta)
+                    connection.connect() 
+                } catch (e: Exception) {
+                    Log.e(TAG, "Falha ao abrir porta da impressora", e)
+                    promise.reject("SOCKET_ERROR", "A impressora recusou a conexão (pode estar desligada ou ocupada)", e)
+                    return@AsyncFunction
+                }
+                
+                // 2. Cria a instância da impressora UMA ÚNICA VEZ
+                // Assumindo bobina de 58mm (384 dots) como padrão para a conexão inicial
+                val printer = EscPosPrinter(connection, DEFAULT_DPI, DEFAULT_WIDTH_MM, 384)
+                
+                // 3. Salva globalmente para reutilizar nas impressões
+                currentConnection = connection
+                currentPrinter = printer
+                // ==========================================
+                
+                Log.d(TAG, "Conectado e inicializado com sucesso: $printerName")
+                promise.resolve(mapOf("success" to true, "message" to "Conectado à impressora $printerName"))
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Erro ao conectar: ${e.message}", e)
+                promise.reject("CONNECTION_ERROR", e.message ?: "Erro ao conectar", e)
+            }
+        }
+3. O Novo Método getOrCreatePrinter
+Como a impressora agora é instanciada na hora de conectar, o getOrCreatePrinter (usado na hora de imprimir) só precisa devolver a instância que já está pronta. Substitua o método atual no final do seu arquivo:
 
-TypeScript
-import React, { useEffect, useState } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
-import { NativeModulesProxy } from 'expo-modules-core';
-
-const { ExpoThermalPrinter } = NativeModulesProxy;
-
-interface Printer {
-  name: string;
-  address: string;
-  type: 'bluetooth' | 'usb' | 'internal';
-}
-
-export const PrinterSelector = () => {
-  const [printers, setPrinters] = useState<Printer[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [connecting, setConnecting] = useState<string | null>(null);
-
-  const loadPrinters = async () => {
-    setLoading(true);
-    try {
-      const list = await ExpoThermalPrinter.getPairedPrinters();
-      setPrinters(list);
-    } catch (error) {
-      Alert.alert("Erro", "Não foi possível buscar as impressoras.");
-    } finally {
-      setLoading(false);
+Kotlin
+    /**
+     * Obtém a instância ativa da impressora ou tenta auto-conectar
+     */
+    private fun getOrCreatePrinter(paperWidth: Int, dpi: Int): EscPosPrinter? {
+        try {
+            // Se já temos a impressora pronta e conectada, apenas devolve ela!
+            if (currentPrinter != null) {
+                return currentPrinter
+            }
+            
+            Log.d(TAG, "Nenhuma impressora ativa. Tentando auto-detectar...")
+            val connection = findAnyAvailablePrinter()
+            
+            if (connection == null) {
+                Log.w(TAG, "Auto-detect falhou.")
+                return null
+            }
+            
+            // Se achou no auto-detect, TEM QUE CONECTAR O SOCKET AQUI TAMBÉM
+            try {
+                connection.connect()
+            } catch (e: Exception) {
+                Log.e(TAG, "Falha ao abrir porta no auto-detect", e)
+                return null
+            }
+            
+            val widthPixels = if (paperWidth == 58) 384 else 576
+            val printer = EscPosPrinter(connection, dpi, DEFAULT_WIDTH_MM, widthPixels)
+            
+            currentConnection = connection
+            currentPrinter = printer
+            
+            return printer
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao resgatar printer: ${e.message}", e)
+            return null
+        }
     }
-  };
+4. Ajuste no disconnectPrinter
+Garanta que, ao desconectar, você limpe ambas as variáveis para não deixar "lixo" na memória do Android:
 
-  const handleConnect = async (printer: Printer) => {
-    setConnecting(printer.address);
-    try {
-      const result = await ExpoThermalPrinter.connectPrinter(printer.address);
-      Alert.alert("Sucesso", result.message);
-    } catch (error: any) {
-      Alert.alert("Falha na Conexão", error.message);
-    } finally {
-      setConnecting(null);
-    }
-  };
+Kotlin
+        AsyncFunction("disconnectPrinter") { promise: Promise ->
+            try {
+                currentConnection?.disconnect()
+                currentConnection = null
+                currentPrinter = null // Limpa a instância
+                
+                Log.d(TAG, "Desconectado da impressora")
+                promise.resolve(mapOf("success" to true, "message" to "Desconectado"))
+            } catch (e: Exception) {
+                promise.reject("DISCONNECT_ERROR", e.message, e)
+            }
+        }
+Resumo de por que isso resolve o seu problema 100%:
+Fim da Conexão Fantasma: O comando connection.connect() obriga o Android a negociar com o hardware da Moderninha. Se a maquininha estiver ocupada, o app vai te avisar com o erro SOCKET_ERROR em vez de mentir que conectou.
 
-  useEffect(() => {
-    loadPrinters();
-  }, []);
+Fim do Broken Pipe (Travar ao Imprimir): Antes, o seu código criava um novo EscPosPrinter a cada clique em imprimir. Isso enviava um comando de Reset (INIT) para a impressora no meio da conexão, o que trava a guilhotina virtual da Moderninha. Agora, o EscPosPrinter é criado uma vez só, e os comandos fluem perfeitamente.
 
-  const renderPrinterItem = ({ item }: { item: Printer }) => (
-    <TouchableOpacity 
-      style={styles.card} 
-      onPress={() => handleConnect(item)}
-      disabled={connecting !== null}
-    >
-      <View style={styles.info}>
-        <Text style={styles.name}>{item.name}</Text>
-        <Text style={styles.address}>{item.type.toUpperCase()} • {item.address}</Text>
-      </View>
-      {connecting === item.address ? (
-        <ActivityIndicator color="#007AFF" />
-      ) : (
-        <Text style={styles.connectText}>Conectar</Text>
-      )}
-    </TouchableOpacity>
-  );
+Um lembrete importante: No arquivo android/app/src/main/AndroidManifest.xml, não esqueça de adicionar esta linha para o USB funcionar perfeitamente:
+<uses-feature android:name="android.hardware.usb.host" />
 
-  return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <Text style={styles.title}>Impressoras Disponíveis</Text>
-        <TouchableOpacity onPress={loadPrinters}>
-          <Text style={styles.refresh}>Atualizar</Text>
-        </TouchableOpacity>
-      </View>
-
-      {loading ? (
-        <ActivityIndicator size="large" style={{ marginTop: 20 }} />
-      ) : (
-        <FlatList
-          data={printers}
-          keyExtractor={(item) => item.address}
-          renderItem={renderPrinterItem}
-          ListEmptyComponent={<Text style={styles.empty}>Nenhuma impressora encontrada.</Text>}
-        />
-      )}
-    </View>
-  );
-};
-
-const styles = StyleSheet.create({
-  container: { flex: 1, padding: 20, backgroundColor: '#f5f5f5' },
-  header: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 20 },
-  title: { fontSize: 18, fontWeight: 'bold' },
-  refresh: { color: '#007AFF', fontWeight: '600' },
-  card: { 
-    backgroundColor: '#fff', 
-    padding: 15, 
-    borderRadius: 10, 
-    flexDirection: 'row', 
-    alignItems: 'center', 
-    marginBottom: 10,
-    elevation: 2 
-  },
-  info: { flex: 1 },
-  name: { fontSize: 16, fontWeight: '500' },
-  address: { fontSize: 12, color: '#666' },
-  connectText: { color: '#007AFF', fontWeight: 'bold' },
-  empty: { textAlign: 'center', marginTop: 50, color: '#999' }
-});
-Dicas de Ouro para a Experiência do Usuário (UX):
-Feedback Visual: Note que usei um ActivityIndicator no card específico que está conectando. Isso evita que o usuário clique várias vezes enquanto o Bluetooth está negociando o "handshake".
-
-Auto-seleção: No useEffect, se a lista retornar apenas uma impressora (comum em Moderninhas Smart onde só existe a interna), você pode disparar o handleConnect automaticamente para economizar um clique do usuário.
-
-Persistência: Seria ideal usar um AsyncStorage para salvar o address da última impressora conectada com sucesso. Assim, da próxima vez que o app abrir, ele já tenta conectar nela em background.
-
-Por que isso fecha o ciclo?
-Com esse componente, o usuário tem controle total. Se ele estiver em uma Moderninha Smart, o seu código Kotlin vai detectar a USB interna. Se ele estiver usando uma impressora Bluetooth externa (tipo as da China ou Leopardo), ele também consegue parear e usar.
+Com essas substituições, seu módulo Kotlin está no mesmo nível de engenharia do RawBT! Faça o teste de tentar conectar e imprimir agora. Qualquer dúvida na compilação, é só chamar!

@@ -1,14 +1,18 @@
 package expo.modules.thermalprinter
 
 import android.app.PendingIntent
+import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
 import android.util.Base64
 import android.util.Log
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import com.dantsu.escposprinter.EscPosPrinter
 import com.dantsu.escposprinter.connection.DeviceConnection
 import com.dantsu.escposprinter.connection.bluetooth.BluetoothConnection
@@ -35,9 +39,13 @@ class ExpoThermalPrinterModule : Module() {
         private const val TAG = "ThermalPrinter"
         private const val DEFAULT_DPI = 203
         private const val DEFAULT_WIDTH_MM = 48f
+        private const val ACTION_USB_PERMISSION = "expo.modules.thermalprinter.USB_PERMISSION"
     }
     
     private var currentConnection: DeviceConnection? = null
+    private var currentPrinter: EscPosPrinter? = null
+    private var usbPermissionLatch: CountDownLatch? = null
+    private var usbPermissionGranted = false
     
     override fun definition() = ModuleDefinition {
         Name("ExpoThermalPrinter")
@@ -271,20 +279,19 @@ class ExpoThermalPrinterModule : Module() {
                         val usbConn = usbConnections.find { it.device.deviceId == deviceId }
                         
                         if (usbConn != null) {
-                            // Solicita permissão USB se necessário
                             val device = usbConn.device
+                            
+                            // Solicita permissão USB se necessário
                             if (!usbManager.hasPermission(device)) {
                                 Log.d(TAG, "Solicitando permissão USB...")
-                                val permissionIntent = PendingIntent.getBroadcast(
-                                    context,
-                                    0,
-                                    Intent("com.android.example.USB_PERMISSION"),
-                                    PendingIntent.FLAG_IMMUTABLE
-                                )
-                                usbManager.requestPermission(device, permissionIntent)
+                                val granted = requestUsbPermission(context, usbManager, device)
                                 
-                                // Aguarda um pouco para permissão ser concedida
-                                Thread.sleep(1000)
+                                if (!granted) {
+                                    promise.reject("USB_PERMISSION_DENIED", "Permissão USB negada pelo usuário", null)
+                                    return@AsyncFunction
+                                }
+                                
+                                Log.d(TAG, "Permissão USB concedida!")
                             }
                             
                             connection = usbConn
@@ -305,9 +312,34 @@ class ExpoThermalPrinterModule : Module() {
                     return@AsyncFunction
                 }
                 
-                currentConnection = connection
+                // ==========================================
+                // CORREÇÃO CRÍTICA: Abre socket e cria printer UMA VEZ
+                // ==========================================
+                Log.d(TAG, "Abrindo Socket de comunicação...")
+                try {
+                    // Desconecta anterior se existir
+                    currentConnection?.disconnect()
+                    currentPrinter = null
+                    
+                    // 1. FAZ A CONEXÃO FÍSICA! (Abre a porta)
+                    connection.connect()
+                    Log.d(TAG, "Socket aberto com sucesso!")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Falha ao abrir porta da impressora", e)
+                    promise.reject("SOCKET_ERROR", "A impressora recusou a conexão (pode estar desligada ou ocupada)", e)
+                    return@AsyncFunction
+                }
                 
-                Log.d(TAG, "Conectado à impressora: $printerName")
+                // 2. Cria a instância da impressora UMA ÚNICA VEZ
+                // Assumindo bobina de 58mm (384 dots) como padrão
+                val printer = EscPosPrinter(connection, DEFAULT_DPI, DEFAULT_WIDTH_MM, 384)
+                
+                // 3. Salva globalmente para reutilizar nas impressões
+                currentConnection = connection
+                currentPrinter = printer
+                // ==========================================
+                
+                Log.d(TAG, "Conectado e inicializado com sucesso: $printerName")
                 
                 promise.resolve(
                     mapOf(
@@ -379,6 +411,7 @@ class ExpoThermalPrinterModule : Module() {
             try {
                 currentConnection?.disconnect()
                 currentConnection = null
+                currentPrinter = null // Limpa a instância para evitar lixo na memória
                 
                 Log.d(TAG, "Desconectado da impressora")
                 
@@ -397,25 +430,44 @@ class ExpoThermalPrinterModule : Module() {
     }
     
     /**
-     * Obtém ou cria uma instância do printer
-     * Reutiliza conexão existente ou busca automaticamente (Bluetooth → USB)
+     * Obtém a instância ativa da impressora ou tenta auto-conectar
+     * CORREÇÃO: Reutiliza currentPrinter para evitar Broken Pipe
      */
     private fun getOrCreatePrinter(paperWidth: Int, dpi: Int): EscPosPrinter? {
         try {
-            val connection = currentConnection ?: findAnyAvailablePrinter()
+            // Se já temos a impressora pronta e conectada, apenas devolve ela!
+            if (currentPrinter != null) {
+                Log.d(TAG, "Reutilizando impressora já conectada")
+                return currentPrinter
+            }
+            
+            Log.d(TAG, "Nenhuma impressora ativa. Tentando auto-detectar...")
+            val connection = findAnyAvailablePrinter()
             
             if (connection == null) {
-                Log.w(TAG, "Nenhuma impressora disponível")
+                Log.w(TAG, "Auto-detect falhou.")
                 return null
             }
             
-            // Calcula largura em pixels (203 DPI)
-            val widthPixels = if (paperWidth == 58) 384 else 576
+            // Se achou no auto-detect, TEM QUE CONECTAR O SOCKET AQUI TAMBÉM
+            try {
+                connection.connect()
+                Log.d(TAG, "Socket auto-detect aberto com sucesso!")
+            } catch (e: Exception) {
+                Log.e(TAG, "Falha ao abrir porta no auto-detect", e)
+                return null
+            }
             
-            return EscPosPrinter(connection, dpi, DEFAULT_WIDTH_MM, widthPixels)
+            val widthPixels = if (paperWidth == 58) 384 else 576
+            val printer = EscPosPrinter(connection, dpi, DEFAULT_WIDTH_MM, widthPixels)
+            
+            currentConnection = connection
+            currentPrinter = printer
+            
+            return printer
             
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ao criar printer: ${e.message}", e)
+            Log.e(TAG, "Erro ao resgatar printer: ${e.message}", e)
             return null
         }
     }
@@ -464,16 +516,14 @@ class ExpoThermalPrinterModule : Module() {
                         // Solicita permissão USB se necessário
                         if (!usbManager.hasPermission(device)) {
                             Log.d(TAG, "Solicitando permissão USB para auto-detect...")
-                            val permissionIntent = PendingIntent.getBroadcast(
-                                context,
-                                0,
-                                Intent("com.android.example.USB_PERMISSION"),
-                                PendingIntent.FLAG_IMMUTABLE
-                            )
-                            usbManager.requestPermission(device, permissionIntent)
+                            val granted = requestUsbPermission(context, usbManager, device)
                             
-                            // Aguarda permissão
-                            Thread.sleep(1000)
+                            if (!granted) {
+                                Log.w(TAG, "Permissão USB negada")
+                                return null
+                            }
+                            
+                            Log.d(TAG, "Permissão USB concedida!")
                         }
                         
                         Log.d(TAG, "✓ USB encontrado: ${device.deviceName}")
@@ -491,6 +541,75 @@ class ExpoThermalPrinterModule : Module() {
         } catch (e: Exception) {
             Log.e(TAG, "Erro ao buscar impressora: ${e.message}", e)
             return null
+        }
+    }
+    
+    /**
+     * Solicita permissão USB e aguarda resposta do usuário
+     * Usa BroadcastReceiver para capturar a resposta do popup
+     */
+    private fun requestUsbPermission(context: Context, usbManager: UsbManager, device: UsbDevice): Boolean {
+        try {
+            // Cria latch para aguardar resposta
+            usbPermissionLatch = CountDownLatch(1)
+            usbPermissionGranted = false
+            
+            // Registra BroadcastReceiver para receber resposta
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    if (intent.action == ACTION_USB_PERMISSION) {
+                        synchronized(this) {
+                            val device: UsbDevice? = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                            
+                            if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
+                                Log.d(TAG, "Permissão USB CONCEDIDA pelo usuário")
+                                usbPermissionGranted = true
+                            } else {
+                                Log.w(TAG, "Permissão USB NEGADA pelo usuário")
+                                usbPermissionGranted = false
+                            }
+                            
+                            usbPermissionLatch?.countDown()
+                        }
+                    }
+                }
+            }
+            
+            // Registra receiver
+            val filter = IntentFilter(ACTION_USB_PERMISSION)
+            context.registerReceiver(receiver, filter)
+            
+            // Solicita permissão
+            val permissionIntent = PendingIntent.getBroadcast(
+                context,
+                0,
+                Intent(ACTION_USB_PERMISSION),
+                PendingIntent.FLAG_MUTABLE
+            )
+            usbManager.requestPermission(device, permissionIntent)
+            
+            Log.d(TAG, "Aguardando resposta do usuário (popup USB)...")
+            
+            // Aguarda até 30 segundos pela resposta
+            val granted = usbPermissionLatch?.await(30, TimeUnit.SECONDS) ?: false
+            
+            // Remove receiver
+            try {
+                context.unregisterReceiver(receiver)
+            } catch (e: Exception) {
+                Log.w(TAG, "Erro ao remover receiver: ${e.message}")
+            }
+            
+            if (!granted) {
+                Log.w(TAG, "Timeout aguardando permissão USB")
+                return false
+            }
+            
+            return usbPermissionGranted
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao solicitar permissão USB: ${e.message}", e)
+            return false
         }
     }
 }

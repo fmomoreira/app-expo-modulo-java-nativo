@@ -380,8 +380,8 @@ class ExpoThermalPrinterModule : Module() {
                 }
                 
                 // 2. Cria a instância da impressora UMA ÚNICA VEZ
-                // Assumindo bobina de 58mm (384 dots) como padrão
-                val printer = EscPosPrinter(connection, DEFAULT_DPI, DEFAULT_WIDTH_MM, 384)
+                // Bobina de 58mm = 32 caracteres por linha (não confundir com 384 pixels!)
+                val printer = EscPosPrinter(connection, DEFAULT_DPI, DEFAULT_WIDTH_MM, 32)
                 
                 // 3. Salva globalmente para reutilizar nas impressões
                 currentConnection = connection
@@ -426,17 +426,18 @@ class ExpoThermalPrinterModule : Module() {
                 val qrCodeUrl = options["qrCodeUrl"] as? String ?: "https://reinodasorte.com.br"
                 
                 val receiptText = buildString {
-                    append("[C]================================\n")
-                    append("[C]<b>CUPOM FISCAL</b>\n")
-                    append("[C]================================\n\n")
+                    // Cabeçalho com fonte maior
+                    append("[C]<font size='big'><b>CUPOM FISCAL</b></font>\n")
+                    append("[C]================================\n")  // 32 caracteres exatos
                     
                     if (cpf.isNotEmpty()) {
                         append("[L]CPF: $cpf\n")
-                        append("[L]--------------------------------\n")
+                        append("[L]--------------------------------\n")  // 32 caracteres exatos
                     }
                     
+                    // Cabeçalho da tabela em negrito
                     append("[L]<b>PRODUTO</b>[R]<b>VALOR</b>\n")
-                    append("[L]--------------------------------\n")
+                    append("[L]--------------------------------\n")  // 32 caracteres exatos
                     
                     items.forEach { item ->
                         val name = item["name"] as? String ?: "Produto"
@@ -444,19 +445,35 @@ class ExpoThermalPrinterModule : Module() {
                         val quantity = item["quantity"] as? Int ?: 1
                         val itemTotal = price * quantity
                         
-                        append("[L]$name\n")
-                        append("[L]  ${quantity}x R$ %.2f[R]R$ %.2f\n".format(price, itemTotal))
+                        // Formata linha respeitando 32 caracteres
+                        val qtdStr = "${quantity}x "
+                        val precoStr = "R$ %.2f".format(itemTotal)
+                        val espacoLivre = 32 - qtdStr.length - precoStr.length
+                        
+                        // Trunca nome se necessário
+                        val nomeFormatado = if (name.length > espacoLivre) {
+                            name.substring(0, espacoLivre - 2) + ".."
+                        } else {
+                            name
+                        }
+                        
+                        append("[L]$qtdStr$nomeFormatado[R]$precoStr\n")
                     }
                     
-                    append("[L]--------------------------------\n")
-                    append("[L]<b>TOTAL</b>[R]<b>R$ %.2f</b>\n".format(total))
-                    append("[L]================================\n\n")
+                    // Total em destaque com fonte maior
+                    append("[L]--------------------------------\n")  // 32 caracteres exatos
+                    append("[L]<font size='tall'><b>TOTAL[R]R$ %.2f</b></font>\n".format(total))
+                    append("[L]================================\n")  // 32 caracteres exatos
                     
+                    // QR Code menor (15 em vez de 20) para economizar papel
                     append("[C]Acesse nosso site:\n")
-                    append("[C]<qrcode size='20'>$qrCodeUrl</qrcode>\n\n")
-                    append("[C]$qrCodeUrl\n\n")
+                    append("[C]<qrcode size='15'>$qrCodeUrl</qrcode>\n")
+                    append("[C]<font size='small'>$qrCodeUrl</font>\n")
                     
-                    append("[C]Obrigado pela preferência!\n\n\n")
+                    append("[C]Obrigado pela preferencia!\n")
+                    append("[L]\n")
+                    append("[L]\n")
+                    append("[L]\n")
                 }
                 
                 printer.printFormattedText(receiptText)
@@ -656,8 +673,10 @@ class ExpoThermalPrinterModule : Module() {
                 return null
             }
             
-            val widthPixels = if (paperWidth == 58) 384 else 576
-            val printer = EscPosPrinter(connection, dpi, DEFAULT_WIDTH_MM, widthPixels)
+            // IMPORTANTE: O 4º parâmetro é CARACTERES por linha, não pixels!
+            // 58mm = 32 caracteres, 80mm = 48 caracteres
+            val widthChars = if (paperWidth == 58) 32 else 48
+            val printer = EscPosPrinter(connection, dpi, DEFAULT_WIDTH_MM, widthChars)
             
             currentConnection = connection
             currentPrinter = printer

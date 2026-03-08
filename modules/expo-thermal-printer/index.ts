@@ -82,4 +82,13 @@ export async function disconnectPrinter(): Promise<PrintResult> {
   return await ExpoThermalPrinterModule.disconnectPrinter();
 }
 
+/**
+ * Execute printer self-test
+ * Prints a diagnostic page with alignments, formatting, accents and barcode
+ * @returns Promise with test result
+ */
+export async function selfTest(): Promise<PrintResult> {
+  return await ExpoThermalPrinterModule.selfTest();
+}
+
 export { ExpoThermalPrinterModule };

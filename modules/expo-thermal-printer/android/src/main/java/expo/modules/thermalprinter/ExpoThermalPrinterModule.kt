@@ -103,6 +103,10 @@ class ExpoThermalPrinterModule : Module() {
                     "[L]\n"
                 )
                 
+                // Libera memória do Bitmap (importante para maquininhas com pouca RAM)
+                bitmap?.recycle()
+                Log.d(TAG, "Memória do Bitmap liberada.")
+                
                 Log.d(TAG, "Impressão concluída com sucesso!")
                 
                 promise.resolve(
@@ -139,8 +143,9 @@ class ExpoThermalPrinterModule : Module() {
                     return@AsyncFunction
                 }
                 
+                // Usa Code Page 850 para acentuação brasileira (ç, á, é, etc)
                 printer.printFormattedText(
-                    "[C]<b>$text</b>\n" +
+                    "[C]<font cp=\"850\"><b>$text</b></font>\n" +
                     "[L]\n" +
                     "[L]\n"
                 )
@@ -194,7 +199,7 @@ class ExpoThermalPrinterModule : Module() {
                     val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
                     
                     if (usbManager != null) {
-                        val usbConnections = UsbPrintersConnections(usbManager).list ?: emptyArray()
+                        val usbConnections = UsbPrintersConnections(context).list ?: emptyArray()
                         
                         usbConnections.forEach { connection ->
                             val device = connection.device
@@ -257,7 +262,7 @@ class ExpoThermalPrinterModule : Module() {
                     val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
                     
                     if (usbManager != null) {
-                        val usbConnections = UsbPrintersConnections(usbManager).list ?: emptyArray()
+                        val usbConnections = UsbPrintersConnections(context).list ?: emptyArray()
                         val deviceId = address.removePrefix("usb_").toIntOrNull()
                         
                         connection = usbConnections.find { it.device.deviceId == deviceId }
@@ -291,6 +296,54 @@ class ExpoThermalPrinterModule : Module() {
             } catch (e: Exception) {
                 Log.e(TAG, "Erro ao conectar: ${e.message}", e)
                 promise.reject("CONNECTION_ERROR", e.message ?: "Erro ao conectar", e)
+            }
+        }
+        
+        /**
+         * Executa auto-teste da impressora
+         * Imprime página de diagnóstico com alinhamentos, formatações e código de barras
+         * 
+         * @param promise Promise para retornar resultado
+         */
+        AsyncFunction("selfTest") { promise: Promise ->
+            try {
+                Log.d(TAG, "Executando auto-teste da impressora...")
+                
+                val printer = getOrCreatePrinter(58, DEFAULT_DPI)
+                
+                if (printer == null) {
+                    promise.reject("NO_PRINTER", "Nenhuma impressora disponível", null)
+                    return@AsyncFunction
+                }
+                
+                printer.printFormattedText(
+                    "[C]<font cp=\"850\"><b>TESTE DE IMPRESSÃO</b></font>\n" +
+                    "[L]--------------------------------\n" +
+                    "[L]<font cp=\"850\">Alinhamento Esquerdo</font>\n" +
+                    "[C]<font cp=\"850\">Alinhamento Central</font>\n" +
+                    "[R]<font cp=\"850\">Alinhamento Direito</font>\n" +
+                    "[L]--------------------------------\n" +
+                    "[L]<b>Negrito</b> <i>Itálico</i>\n" +
+                    "[L]<font cp=\"850\">Acentuação: á é í ó ú ç ã õ</font>\n" +
+                    "[L]--------------------------------\n" +
+                    "[C]<barcode type=\"ean13\" height=\"10\">1234567890128</barcode>\n" +
+                    "[L]\n" +
+                    "[L]\n" +
+                    "[L]\n"
+                )
+                
+                Log.d(TAG, "Auto-teste concluído com sucesso!")
+                
+                promise.resolve(
+                    mapOf(
+                        "success" to true,
+                        "message" to "Teste de impressão concluído"
+                    )
+                )
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Erro no auto-teste: ${e.message}", e)
+                promise.reject("TEST_ERROR", e.message ?: "Erro no auto-teste", e)
             }
         }
         
@@ -379,7 +432,7 @@ class ExpoThermalPrinterModule : Module() {
                 val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
                 
                 if (usbManager != null) {
-                    val usbConnections = UsbPrintersConnections(usbManager).list
+                    val usbConnections = UsbPrintersConnections(context).list
                     
                     if (!usbConnections.isNullOrEmpty()) {
                         val usbPrinter = usbConnections.first()

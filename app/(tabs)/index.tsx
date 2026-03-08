@@ -16,6 +16,7 @@ import {
   getPairedPrinters,
   connectPrinter,
   disconnectPrinter,
+  selfTest,
   PrinterDevice,
 } from '../../modules/expo-thermal-printer';
 
@@ -172,6 +173,27 @@ export default function HomeScreen() {
     }
   };
 
+  const handleSelfTest = async () => {
+    setLoading(true);
+    try {
+      const hasPermission = await requestBluetoothPermissions();
+      if (!hasPermission) {
+        Alert.alert('Erro', 'Permissões Bluetooth não concedidas');
+        return;
+      }
+
+      const result = await selfTest();
+
+      if (result.success) {
+        Alert.alert('Sucesso', 'Auto-teste concluído! Verifique a impressão.');
+      }
+    } catch (error: any) {
+      Alert.alert('Erro', error.message || 'Erro ao executar auto-teste');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <ScrollView style={styles.container}>
       <View style={styles.header}>
@@ -231,6 +253,14 @@ export default function HomeScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>2. Testar Impressão</Text>
         
+        <TouchableOpacity
+          style={[styles.button, styles.selfTestButton]}
+          onPress={handleSelfTest}
+          disabled={loading}
+        >
+          <Text style={styles.buttonText}>🔧 Auto-Teste (Diagnóstico)</Text>
+        </TouchableOpacity>
+
         <TouchableOpacity
           style={styles.button}
           onPress={handlePrintText}
@@ -324,6 +354,9 @@ const styles = StyleSheet.create({
   },
   disconnectButton: {
     backgroundColor: '#FF3B30',
+  },
+  selfTestButton: {
+    backgroundColor: '#34C759',
   },
   buttonText: {
     color: '#fff',

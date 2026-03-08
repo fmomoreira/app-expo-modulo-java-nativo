@@ -91,6 +91,20 @@ export async function selfTest(): Promise<PrintResult> {
   return await ExpoThermalPrinterModule.selfTest();
 }
 
+/**
+ * Print a test image hardcoded in Kotlin (no data sent from React Native)
+ * Used to isolate if the problem is in RN→Kotlin communication or Kotlin processing
+ * @param options - Print options (paperWidth, dpi, applyDithering)
+ * @returns Promise with print result
+ */
+export async function printTestImage(options?: PrintOptions): Promise<PrintResult> {
+  return await ExpoThermalPrinterModule.printTestImage(
+    options?.paperWidth || 58,
+    options?.dpi || 203,
+    options?.applyDithering !== false
+  );
+}
+
 export interface ReceiptItem {
   name: string;
   price: number;

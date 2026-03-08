@@ -19,11 +19,34 @@ import {
   selfTest,
   PrinterDevice,
 } from '../../modules/expo-thermal-printer';
+import { ReceiptTemplate, ReceiptItem } from '../../components/ReceiptTemplate';
+import { usePrintReceipt } from '../../hooks/usePrintReceipt';
+import { LogModal } from '../../components/LogModal';
 
 export default function HomeScreen() {
   const [loading, setLoading] = useState(false);
   const [printers, setPrinters] = useState<PrinterDevice[]>([]);
   const [connectedPrinter, setConnectedPrinter] = useState<string | null>(null);
+  const [logModalVisible, setLogModalVisible] = useState(false);
+  const [logModalTitle, setLogModalTitle] = useState('');
+  const [logs, setLogs] = useState<string[]>([]);
+  
+  // Hook para impressão de template
+  const { receiptRef, printReceipt, isPrinting } = usePrintReceipt();
+  
+  // Dados de exemplo para o cupom fiscal
+  const sampleReceiptData: ReceiptItem[] = [
+    { name: 'Coca-Cola 2L', price: 8.50, quantity: 2 },
+    { name: 'Pão Francês (kg)', price: 12.00, quantity: 1 },
+    { name: 'Queijo Minas (kg)', price: 35.00, quantity: 0.5 },
+  ];
+  const sampleTotal = 46.50;
+
+  const showLogsModal = (title: string, logMessages: string[]) => {
+    setLogModalTitle(title);
+    setLogs(logMessages);
+    setLogModalVisible(true);
+  };
 
   const requestBluetoothPermissions = async (): Promise<boolean> => {
     if (Platform.OS !== 'android') {
@@ -220,6 +243,84 @@ export default function HomeScreen() {
     }
   };
 
+  const handleTestKotlinCommunication = async () => {
+    const logMessages: string[] = [];
+    try {
+      setLoading(true);
+      logMessages.push('=== TESTE DE COMUNICAÇÃO KOTLIN ===');
+      
+      const testBase64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==';
+      
+      logMessages.push(`1. Tamanho do Base64: ${testBase64.length}`);
+      logMessages.push(`2. Primeiros 20 caracteres: ${testBase64.substring(0, 20)}`);
+      logMessages.push('3. Enviando para Kotlin...');
+      
+      const result = await printImage(testBase64, {
+        paperWidth: 58,
+        dpi: 203,
+        applyDithering: true,
+      });
+      
+      logMessages.push('4. ✅ SUCESSO! Resultado:');
+      logMessages.push(JSON.stringify(result, null, 2));
+      
+      console.log(logMessages.join('\n'));
+      Alert.alert('✅ Comunicação OK', 'Kotlin recebeu e processou a imagem com sucesso!');
+      
+    } catch (error: any) {
+      logMessages.push('5. ❌ ERRO CAPTURADO:');
+      logMessages.push(`Tipo: ${error.name || 'Error'}`);
+      logMessages.push(`Mensagem: ${error.message || String(error)}`);
+      if (error.stack) {
+        logMessages.push(`Stack: ${error.stack}`);
+      }
+      
+      console.error(logMessages.join('\n'));
+      showLogsModal('❌ Erro na Comunicação Kotlin', logMessages);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePrintTemplate = async () => {
+    const logMessages: string[] = [];
+    try {
+      setLoading(true);
+      
+      const hasPermission = await requestBluetoothPermissions();
+      if (!hasPermission) {
+        Alert.alert('Erro', 'Permissões Bluetooth não concedidas');
+        setLoading(false);
+        return;
+      }
+
+      logMessages.push('[handlePrintTemplate] Iniciando impressão de template...');
+      const result = await printReceipt();
+      logMessages.push(`[handlePrintTemplate] Resultado: ${JSON.stringify(result, null, 2)}`);
+
+      if (result.success) {
+        console.log(logMessages.join('\n'));
+        Alert.alert('✅ Sucesso', 'Cupom fiscal impresso com sucesso!');
+      } else {
+        logMessages.push(`❌ FALHA: ${result.message}`);
+        console.error(logMessages.join('\n'));
+        showLogsModal('❌ Erro ao Imprimir Template', logMessages);
+      }
+    } catch (error: any) {
+      logMessages.push('❌ ERRO CAPTURADO:');
+      logMessages.push(`Tipo: ${error.name || 'Error'}`);
+      logMessages.push(`Mensagem: ${error.message || String(error)}`);
+      if (error.stack) {
+        logMessages.push(`Stack: ${error.stack}`);
+      }
+      
+      console.error(logMessages.join('\n'));
+      showLogsModal('❌ Erro ao Imprimir Cupom', logMessages);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <ScrollView style={styles.container}>
       <View style={styles.header}>
@@ -280,6 +381,14 @@ export default function HomeScreen() {
         <Text style={styles.sectionTitle}>2. Testar Impressão</Text>
         
         <TouchableOpacity
+          style={[styles.button, { backgroundColor: '#9C27B0' }]}
+          onPress={handleTestKotlinCommunication}
+          disabled={loading}
+        >
+          <Text style={styles.buttonText}>🧪 Testar Comunicação Kotlin</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
           style={[styles.button, styles.selfTestButton]}
           onPress={handleSelfTest}
           disabled={loading}
@@ -306,12 +415,55 @@ export default function HomeScreen() {
         </TouchableOpacity>
       </View>
 
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>3. Cupom Fiscal (Template React Native)</Text>
+        <Text style={styles.listTitle}>
+          Imprime um layout customizado criado em React Native
+        </Text>
+        
+        <TouchableOpacity
+          style={[styles.button, { backgroundColor: '#FF9500' }]}
+          onPress={handlePrintTemplate}
+          disabled={loading || isPrinting}
+        >
+          <Text style={styles.buttonText}>
+            🧾 Imprimir Cupom Fiscal (Template)
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Template oculto que será capturado como imagem */}
+      {/* Seguindo modelo do desafio.md: position absolute + zIndex -1 + collapsable false */}
+      <View 
+        style={{ position: 'absolute', top: 0, zIndex: -1, opacity: 0 }}
+        collapsable={false}
+      >
+        <ReceiptTemplate
+          ref={receiptRef}
+          storeName="REINO DA SORTE"
+          storeAddress="Av. Principal, 456 - Centro"
+          storeCNPJ="12.345.678/0001-90"
+          cpf="123.456.789-00"
+          items={sampleReceiptData}
+          total={sampleTotal}
+          paymentMethod="Dinheiro"
+          receiptNumber="000123"
+        />
+      </View>
+
       {loading && (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator size="large" color="#007AFF" />
           <Text style={styles.loadingText}>Processando...</Text>
         </View>
       )}
+
+      <LogModal
+        visible={logModalVisible}
+        title={logModalTitle}
+        logs={logs}
+        onClose={() => setLogModalVisible(false)}
+      />
 
       <View style={styles.footer}>
         <Text style={styles.footerText}>

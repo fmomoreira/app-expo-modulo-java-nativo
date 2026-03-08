@@ -1,12 +1,28 @@
 package expo.modules.thermalprinter
 
+import android.app.PendingIntent
+import android.content.BroadcastReceiver
+import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.bluetooth.BluetoothAdapter
+import android.hardware.usb.UsbDevice
+import android.hardware.usb.UsbManager
+import android.os.Build
 import android.util.Base64
 import android.util.Log
+import java.io.IOException
+import java.nio.charset.Charset
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import com.dantsu.escposprinter.EscPosPrinter
+import com.dantsu.escposprinter.connection.DeviceConnection
 import com.dantsu.escposprinter.connection.bluetooth.BluetoothConnection
 import com.dantsu.escposprinter.connection.bluetooth.BluetoothPrintersConnections
+import com.dantsu.escposprinter.connection.usb.UsbConnection
+import com.dantsu.escposprinter.connection.usb.UsbPrintersConnections
 import com.dantsu.escposprinter.textparser.PrinterTextParserImg
 import expo.modules.kotlin.Promise
 import expo.modules.kotlin.modules.Module
@@ -27,9 +43,14 @@ class ExpoThermalPrinterModule : Module() {
         private const val TAG = "ThermalPrinter"
         private const val DEFAULT_DPI = 203
         private const val DEFAULT_WIDTH_MM = 48f
+        private const val ACTION_USB_PERMISSION = "expo.modules.thermalprinter.USB_PERMISSION"
+        private const val MAX_RETRY_ATTEMPTS = 2
     }
     
-    private var currentConnection: BluetoothConnection? = null
+    private var currentConnection: DeviceConnection? = null
+    private var currentPrinter: EscPosPrinter? = null
+    private var usbPermissionLatch: CountDownLatch? = null
+    private var usbPermissionGranted = false
     
     override fun definition() = ModuleDefinition {
         Name("ExpoThermalPrinter")
@@ -42,6 +63,7 @@ class ExpoThermalPrinterModule : Module() {
          * @param promise Promise para retornar resultado
          */
         AsyncFunction("printImage") { base64Image: String, options: Map<String, Any>, promise: Promise ->
+            var bitmap: Bitmap? = null
             try {
                 Log.d(TAG, "Iniciando processo de impressão de imagem...")
                 
@@ -55,7 +77,7 @@ class ExpoThermalPrinterModule : Module() {
                 // Decodifica Base64 para Bitmap
                 Log.d(TAG, "Decodificando imagem Base64...")
                 val decodedBytes = Base64.decode(base64Image, Base64.DEFAULT)
-                var bitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+                bitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
                 
                 if (bitmap == null) {
                     Log.e(TAG, "Falha ao decodificar imagem Base64")
@@ -77,28 +99,24 @@ class ExpoThermalPrinterModule : Module() {
                     Log.d(TAG, "Dithering aplicado com sucesso")
                 }
                 
-                // Conecta à impressora
-                val printer = getOrCreatePrinter(paperWidth, dpi)
+                // Captura bitmap final para uso no retry
+                val finalBitmap = bitmap
                 
-                if (printer == null) {
-                    Log.e(TAG, "Nenhuma impressora disponível")
-                    promise.reject("NO_PRINTER", "Nenhuma impressora Bluetooth pareada encontrada", null)
-                    return@AsyncFunction
+                // Usa printWithRetry para auto-recover de Doze Mode
+                printWithRetry(paperWidth, dpi) { printer ->
+                    Log.d(TAG, "Convertendo bitmap para comandos ESC/POS...")
+                    Log.d(TAG, "Dimensões finais do bitmap: ${finalBitmap.width}x${finalBitmap.height}")
+                    
+                    val imageString = PrinterTextParserImg.bitmapToHexadecimalString(printer, finalBitmap)
+                    Log.d(TAG, "Bitmap convertido para hexadecimal (${imageString.length} caracteres)")
+                    
+                    // Imprime a imagem centralizada
+                    printer.printFormattedText(
+                        "[C]<img>$imageString</img>\n\n\n"
+                    )
+                    
+                    Log.d(TAG, "Impressão de imagem concluída com sucesso!")
                 }
-                
-                // Converte bitmap para comando ESC/POS e imprime
-                Log.d(TAG, "Convertendo bitmap para comandos ESC/POS...")
-                val imageHex = PrinterTextParserImg.bitmapToHexadecimalString(printer, bitmap)
-                
-                Log.d(TAG, "Enviando dados para impressora...")
-                printer.printFormattedText(
-                    "[C]<img>$imageHex</img>\n" +
-                    "[L]\n" +
-                    "[L]\n" +
-                    "[L]\n"
-                )
-                
-                Log.d(TAG, "Impressão concluída com sucesso!")
                 
                 promise.resolve(
                     mapOf(
@@ -110,6 +128,10 @@ class ExpoThermalPrinterModule : Module() {
             } catch (e: Exception) {
                 Log.e(TAG, "Erro durante impressão: ${e.message}", e)
                 promise.reject("PRINT_ERROR", e.message ?: "Erro desconhecido durante impressão", e)
+            } finally {
+                // Libera memória do Bitmap SEMPRE (importante para maquininhas com pouca RAM)
+                bitmap?.recycle()
+                Log.d(TAG, "Memória do Bitmap liberada.")
             }
         }
         
@@ -126,19 +148,19 @@ class ExpoThermalPrinterModule : Module() {
                 
                 val paperWidth = (options["paperWidth"] as? Int) ?: 58
                 val encoding = (options["encoding"] as? String) ?: "ISO-8859-1"
+                val dpi = (options["dpi"] as? Int) ?: DEFAULT_DPI
                 
-                val printer = getOrCreatePrinter(paperWidth, DEFAULT_DPI)
-                
-                if (printer == null) {
-                    promise.reject("NO_PRINTER", "Nenhuma impressora disponível", null)
-                    return@AsyncFunction
+                val charset = when(encoding.uppercase()) {
+                    "UTF-8" -> Charsets.UTF_8
+                    "CP850" -> Charset.forName("CP850")
+                    else -> Charsets.ISO_8859_1
                 }
                 
-                printer.printFormattedText(
-                    "[C]<b>$text</b>\n" +
-                    "[L]\n" +
-                    "[L]\n"
-                )
+                // Usa printWithRetry para auto-recover de Doze Mode
+                printWithRetry(paperWidth, dpi) { printer ->
+                    printer.printFormattedText(text)
+                    Log.d(TAG, "Texto impresso com sucesso")
+                }
                 
                 promise.resolve(
                     mapOf(
@@ -154,67 +176,347 @@ class ExpoThermalPrinterModule : Module() {
         }
         
         /**
-         * Retorna lista de impressoras Bluetooth pareadas
+         * Retorna lista de impressoras (Bluetooth e USB)
          * 
          * @param promise Promise para retornar lista de dispositivos
          */
         AsyncFunction("getPairedPrinters") { promise: Promise ->
             try {
-                Log.d(TAG, "Buscando impressoras Bluetooth pareadas...")
+                Log.d(TAG, "Buscando impressoras disponíveis...")
+                val printersList = mutableListOf<Map<String, String>>()
                 
-                val connections = BluetoothPrintersConnections().list ?: emptyArray()
-                
-                val printers = connections.map { connection ->
-                    val device = connection.device
-                    mapOf(
-                        "name" to (device.name ?: "Desconhecido"),
-                        "address" to device.address,
-                        "type" to "bluetooth"
-                    )
+                // 1. Buscar impressoras Bluetooth
+                try {
+                    Log.d(TAG, "Verificando impressoras Bluetooth...")
+                    
+                    // Verificar se Bluetooth está habilitado
+                    val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+                    if (bluetoothAdapter == null) {
+                        Log.w(TAG, "⚠️ Dispositivo não possui Bluetooth")
+                    } else if (!bluetoothAdapter.isEnabled) {
+                        Log.w(TAG, "⚠️ Bluetooth está DESLIGADO. Peça ao usuário para ligar.")
+                    } else {
+                        Log.d(TAG, "✓ Bluetooth está LIGADO")
+                        val bondedDevices = bluetoothAdapter.bondedDevices
+                        Log.d(TAG, "Dispositivos pareados: ${bondedDevices?.size ?: 0}")
+                        
+                        // CORREÇÃO: Listar TODOS os dispositivos pareados diretamente
+                        // A biblioteca DantSu filtra demais e não detecta InnerPrinter
+                        bondedDevices?.forEach { device ->
+                            Log.d(TAG, "  - ${device.name} (${device.address})")
+                            
+                            // Adicionar TODOS os dispositivos pareados à lista
+                            printersList.add(mapOf(
+                                "name" to (device.name ?: "Bluetooth Desconhecido"),
+                                "address" to device.address,
+                                "type" to "bluetooth"
+                            ))
+                        }
+                        
+                        Log.d(TAG, "Listadas ${bondedDevices?.size ?: 0} impressoras Bluetooth pareadas")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Erro ao buscar Bluetooth: ${e.message}")
                 }
                 
-                Log.d(TAG, "Encontradas ${printers.size} impressoras pareadas")
+                // 2. Buscar impressoras USB (Moderninha Smart)
+                try {
+                    Log.d(TAG, "Verificando impressoras USB...")
+                    val context = appContext.reactContext ?: throw Exception("Context não disponível")
+                    val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
+                    
+                    if (usbManager != null) {
+                        val usbConnections = UsbPrintersConnections(context).list ?: emptyArray()
+                        
+                        usbConnections.forEach { connection ->
+                            val device = connection.device
+                            printersList.add(mapOf(
+                                "name" to (device.deviceName ?: "USB Printer"),
+                                "address" to "usb_${device.deviceId}",
+                                "type" to "usb"
+                            ))
+                        }
+                        
+                        Log.d(TAG, "Encontradas ${usbConnections.size} impressoras USB")
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Erro ao buscar USB: ${e.message}")
+                }
                 
-                promise.resolve(printers)
+                Log.d(TAG, "Total de impressoras encontradas: ${printersList.size}")
+                
+                // Se não encontrou nada, tenta detectar impressora interna genérica
+                if (printersList.isEmpty()) {
+                    Log.d(TAG, "Nenhuma impressora detectada. Adicionando impressora interna genérica...")
+                    printersList.add(mapOf(
+                        "name" to "Impressora Interna (Auto-detect)",
+                        "address" to "internal_auto",
+                        "type" to "internal"
+                    ))
+                }
+                
+                promise.resolve(printersList)
                 
             } catch (e: Exception) {
                 Log.e(TAG, "Erro ao buscar impressoras: ${e.message}", e)
-                promise.reject("BLUETOOTH_ERROR", e.message ?: "Erro ao buscar impressoras", e)
+                promise.reject("SEARCH_ERROR", e.message ?: "Erro ao buscar impressoras", e)
             }
         }
         
         /**
-         * Conecta a uma impressora específica
+         * Conecta a uma impressora específica (Bluetooth, USB ou auto-detect)
          * 
-         * @param address Endereço Bluetooth da impressora
+         * @param address Endereço da impressora
          * @param promise Promise para retornar resultado
          */
         AsyncFunction("connectPrinter") { address: String, promise: Promise ->
             try {
                 Log.d(TAG, "Conectando à impressora: $address")
                 
-                val connections = BluetoothPrintersConnections().list ?: emptyArray()
-                val connection = connections.find { it.device.address == address }
+                var connection: DeviceConnection? = null
+                var printerName = "Desconhecida"
+                
+                // Auto-detect: tenta todas as fontes
+                if (address == "internal_auto") {
+                    Log.d(TAG, "Modo auto-detect ativado")
+                    connection = findAnyAvailablePrinter()
+                    printerName = "Auto-detectada"
+                } 
+                // USB
+                else if (address.startsWith("usb_")) {
+                    Log.d(TAG, "Buscando impressora USB...")
+                    val context = appContext.reactContext ?: throw Exception("Context não disponível")
+                    val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
+                    
+                    if (usbManager != null) {
+                        val usbConnections = UsbPrintersConnections(context).list ?: emptyArray()
+                        val deviceId = address.removePrefix("usb_").toIntOrNull()
+                        
+                        val usbConn = usbConnections.find { it.device.deviceId == deviceId }
+                        
+                        if (usbConn != null) {
+                            val device = usbConn.device
+                            Log.d(TAG, "Impressora USB encontrada: ${device.deviceName} (ID: ${device.deviceId})")
+                            
+                            // Solicita permissão USB se necessário
+                            if (!usbManager.hasPermission(device)) {
+                                Log.d(TAG, "Solicitando permissão USB ao usuário...")
+                                val granted = requestUsbPermission(context, usbManager, device)
+                                
+                                if (!granted) {
+                                    Log.e(TAG, "Permissão USB NEGADA pelo usuário")
+                                    promise.reject("USB_PERMISSION_DENIED", "Permissão USB negada pelo usuário", null)
+                                    return@AsyncFunction
+                                }
+                                
+                                Log.d(TAG, "✓ Permissão USB CONCEDIDA!")
+                            } else {
+                                Log.d(TAG, "✓ Permissão USB já concedida anteriormente")
+                            }
+                            
+                            connection = usbConn
+                            printerName = device.deviceName ?: "USB Printer"
+                            Log.d(TAG, "Conexão USB preparada: $printerName")
+                        } else {
+                            Log.e(TAG, "Impressora USB com ID $deviceId não encontrada")
+                        }
+                    }
+                } 
+                // Bluetooth
+                else {
+                    Log.d(TAG, "Buscando impressora Bluetooth...")
+                    
+                    // Tentar primeiro com a biblioteca DantSu
+                    val bluetoothConnections = BluetoothPrintersConnections().list ?: emptyArray()
+                    connection = bluetoothConnections.find { it.device.address == address }
+                    
+                    // Se não encontrou, criar conexão manualmente usando BluetoothAdapter
+                    if (connection == null) {
+                        Log.d(TAG, "Biblioteca DantSu não encontrou. Tentando BluetoothAdapter...")
+                        val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+                        
+                        if (bluetoothAdapter != null && bluetoothAdapter.isEnabled) {
+                            val bondedDevices = bluetoothAdapter.bondedDevices
+                            val targetDevice = bondedDevices?.find { it.address == address }
+                            
+                            if (targetDevice != null) {
+                                Log.d(TAG, "✓ Dispositivo encontrado: ${targetDevice.name}")
+                                connection = BluetoothConnection(targetDevice)
+                                printerName = targetDevice.name ?: "Bluetooth Printer"
+                            } else {
+                                Log.e(TAG, "Dispositivo $address não está pareado")
+                            }
+                        }
+                    } else {
+                        printerName = (connection as? BluetoothConnection)?.device?.name ?: "Bluetooth Printer"
+                    }
+                }
                 
                 if (connection == null) {
                     promise.reject("NOT_FOUND", "Impressora não encontrada: $address", null)
                     return@AsyncFunction
                 }
                 
-                currentConnection = connection
+                // ==========================================
+                // CORREÇÃO CRÍTICA: Abre socket e cria printer UMA VEZ
+                // ==========================================
+                Log.d(TAG, "Abrindo Socket de comunicação...")
+                try {
+                    // Desconecta anterior se existir
+                    currentConnection?.disconnect()
+                    currentPrinter = null
+                    
+                    // 1. FAZ A CONEXÃO FÍSICA! (Abre a porta)
+                    connection.connect()
+                    Log.d(TAG, "Socket aberto com sucesso!")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Falha ao abrir porta da impressora", e)
+                    promise.reject("SOCKET_ERROR", "A impressora recusou a conexão (pode estar desligada ou ocupada)", e)
+                    return@AsyncFunction
+                }
                 
-                Log.d(TAG, "Conectado à impressora: ${connection.device.name}")
+                // 2. Cria a instância da impressora UMA ÚNICA VEZ
+                // Assumindo bobina de 58mm (384 dots) como padrão
+                val printer = EscPosPrinter(connection, DEFAULT_DPI, DEFAULT_WIDTH_MM, 384)
+                
+                // 3. Salva globalmente para reutilizar nas impressões
+                currentConnection = connection
+                currentPrinter = printer
+                // ==========================================
+                
+                Log.d(TAG, "Conectado e inicializado com sucesso: $printerName")
                 
                 promise.resolve(
                     mapOf(
                         "success" to true,
-                        "message" to "Conectado à impressora ${connection.device.name}"
+                        "message" to "Conectado à impressora $printerName"
                     )
                 )
                 
             } catch (e: Exception) {
                 Log.e(TAG, "Erro ao conectar: ${e.message}", e)
                 promise.reject("CONNECTION_ERROR", e.message ?: "Erro ao conectar", e)
+            }
+        }
+        
+        /**
+         * Imprime um cupom fiscal formatado com produtos e QR code
+         * 
+         * @param items Lista de produtos [{name, price, quantity}]
+         * @param options Opções (cpf, total, qrCodeUrl)
+         * @param promise Promise para retornar resultado
+         */
+        AsyncFunction("printReceipt") { items: List<Map<String, Any>>, options: Map<String, Any>, promise: Promise ->
+            try {
+                Log.d(TAG, "Iniciando impressão de cupom fiscal...")
+                
+                val printer = getOrCreatePrinter(58, DEFAULT_DPI)
+                
+                if (printer == null) {
+                    promise.reject("NO_PRINTER", "Nenhuma impressora conectada", null)
+                    return@AsyncFunction
+                }
+                
+                val cpf = options["cpf"] as? String ?: ""
+                val total = options["total"] as? Double ?: 0.0
+                val qrCodeUrl = options["qrCodeUrl"] as? String ?: "https://reinodasorte.com.br"
+                
+                val receiptText = buildString {
+                    append("[C]================================\n")
+                    append("[C]<b>CUPOM FISCAL</b>\n")
+                    append("[C]================================\n\n")
+                    
+                    if (cpf.isNotEmpty()) {
+                        append("[L]CPF: $cpf\n")
+                        append("[L]--------------------------------\n")
+                    }
+                    
+                    append("[L]<b>PRODUTO</b>[R]<b>VALOR</b>\n")
+                    append("[L]--------------------------------\n")
+                    
+                    items.forEach { item ->
+                        val name = item["name"] as? String ?: "Produto"
+                        val price = item["price"] as? Double ?: 0.0
+                        val quantity = item["quantity"] as? Int ?: 1
+                        val itemTotal = price * quantity
+                        
+                        append("[L]$name\n")
+                        append("[L]  ${quantity}x R$ %.2f[R]R$ %.2f\n".format(price, itemTotal))
+                    }
+                    
+                    append("[L]--------------------------------\n")
+                    append("[L]<b>TOTAL</b>[R]<b>R$ %.2f</b>\n".format(total))
+                    append("[L]================================\n\n")
+                    
+                    append("[C]Acesse nosso site:\n")
+                    append("[C]<qrcode size='20'>$qrCodeUrl</qrcode>\n\n")
+                    append("[C]$qrCodeUrl\n\n")
+                    
+                    append("[C]Obrigado pela preferência!\n\n\n")
+                }
+                
+                printer.printFormattedText(receiptText)
+                
+                Log.d(TAG, "Cupom fiscal impresso com sucesso!")
+                
+                promise.resolve(
+                    mapOf(
+                        "success" to true,
+                        "message" to "Cupom fiscal impresso com sucesso!"
+                    )
+                )
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Erro ao imprimir cupom: ${e.message}", e)
+                promise.reject("RECEIPT_ERROR", e.message ?: "Erro ao imprimir cupom", e)
+            }
+        }
+        
+        /**
+         * Executa auto-teste da impressora
+         * Imprime página de diagnóstico com alinhamentos, formatação, acentuação e código de barras
+         * 
+         * @param promise Promise para retornar resultado
+         */
+        AsyncFunction("selfTest") { promise: Promise ->
+            try {
+                Log.d(TAG, "Executando auto-teste da impressora...")
+                
+                val printer = getOrCreatePrinter(58, DEFAULT_DPI)
+                
+                if (printer == null) {
+                    promise.reject("NO_PRINTER", "Nenhuma impressora disponível", null)
+                    return@AsyncFunction
+                }
+                
+                printer.printFormattedText(
+                    "[C]<font cp=\"850\"><b>TESTE DE IMPRESSÃO</b></font>\n" +
+                    "[L]--------------------------------\n" +
+                    "[L]<font cp=\"850\">Alinhamento Esquerdo</font>\n" +
+                    "[C]<font cp=\"850\">Alinhamento Central</font>\n" +
+                    "[R]<font cp=\"850\">Alinhamento Direito</font>\n" +
+                    "[L]--------------------------------\n" +
+                    "[L]<b>Negrito</b> <i>Itálico</i>\n" +
+                    "[L]<font cp=\"850\">Acentuação: á é í ó ú ç ã õ</font>\n" +
+                    "[L]--------------------------------\n" +
+                    "[C]<barcode type=\"ean13\" height=\"10\">1234567890128</barcode>\n" +
+                    "[L]\n" +
+                    "[L]\n" +
+                    "[L]\n"
+                )
+                
+                Log.d(TAG, "Auto-teste concluído com sucesso!")
+                
+                promise.resolve(
+                    mapOf(
+                        "success" to true,
+                        "message" to "Teste de impressão concluído"
+                    )
+                )
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Erro no auto-teste: ${e.message}", e)
+                promise.reject("TEST_ERROR", e.message ?: "Erro no auto-teste", e)
             }
         }
         
@@ -227,6 +529,7 @@ class ExpoThermalPrinterModule : Module() {
             try {
                 currentConnection?.disconnect()
                 currentConnection = null
+                currentPrinter = null // Limpa a instância para evitar lixo na memória
                 
                 Log.d(TAG, "Desconectado da impressora")
                 
@@ -245,42 +548,263 @@ class ExpoThermalPrinterModule : Module() {
     }
     
     /**
-     * Obtém ou cria uma instância do printer
-     * Reutiliza conexão existente ou seleciona primeira impressora pareada
+     * Obtém a instância ativa da impressora ou tenta auto-conectar
+     * CORREÇÃO: Reutiliza currentPrinter para evitar Broken Pipe
      */
     private fun getOrCreatePrinter(paperWidth: Int, dpi: Int): EscPosPrinter? {
         try {
-            val connection = currentConnection ?: run {
-                Log.d(TAG, "Buscando primeira impressora pareada...")
-                val connections = BluetoothPrintersConnections().list
-                
-                if (connections.isNullOrEmpty()) {
-                    Log.w(TAG, "Nenhuma impressora Bluetooth pareada")
-                    return null
-                }
-                
-                // Prioriza impressoras com nomes conhecidos (Moderninha)
-                val preferredConnection = connections.find { 
+            // Se já temos a impressora pronta e conectada, apenas devolve ela!
+            if (currentPrinter != null) {
+                Log.d(TAG, "Reutilizando impressora já conectada")
+                return currentPrinter
+            }
+            
+            Log.d(TAG, "Nenhuma impressora ativa. Tentando auto-detectar...")
+            val connection = findAnyAvailablePrinter()
+            
+            if (connection == null) {
+                Log.w(TAG, "Auto-detect falhou.")
+                return null
+            }
+            
+            // Se achou no auto-detect, TEM QUE CONECTAR O SOCKET AQUI TAMBÉM
+            try {
+                connection.connect()
+                Log.d(TAG, "Socket auto-detect aberto com sucesso!")
+            } catch (e: Exception) {
+                Log.e(TAG, "Falha ao abrir porta no auto-detect", e)
+                return null
+            }
+            
+            val widthPixels = if (paperWidth == 58) 384 else 576
+            val printer = EscPosPrinter(connection, dpi, DEFAULT_WIDTH_MM, widthPixels)
+            
+            currentConnection = connection
+            currentPrinter = printer
+            
+            return printer
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao resgatar printer: ${e.message}", e)
+            return null
+        }
+    }
+    
+    /**
+     * Busca qualquer impressora disponível com fallback inteligente
+     * Ordem: Bluetooth → USB → Primeira disponível
+     */
+    private fun findAnyAvailablePrinter(): DeviceConnection? {
+        try {
+            // 1. Tentar Bluetooth primeiro
+            Log.d(TAG, "Tentando Bluetooth...")
+            
+            // Verificar se Bluetooth está habilitado
+            val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+            if (bluetoothAdapter == null) {
+                Log.w(TAG, "⚠️ Dispositivo não possui Bluetooth")
+                return null
+            }
+            if (!bluetoothAdapter.isEnabled) {
+                Log.w(TAG, "⚠️ Bluetooth está DESLIGADO")
+                return null
+            }
+            
+            Log.d(TAG, "✓ Bluetooth habilitado, buscando impressoras pareadas...")
+            val bluetoothConnections = BluetoothPrintersConnections().list
+            
+            if (!bluetoothConnections.isNullOrEmpty()) {
+                // Prioriza impressoras com nomes conhecidos (incluindo SUNMI)
+                val preferredBluetooth = bluetoothConnections.find { 
                     val name = it.device.name?.lowercase() ?: ""
                     name.contains("innerprinter") || 
+                    name.contains("sunmi") ||
                     name.contains("mpos") || 
                     name.contains("moderninha") ||
                     name.contains("printer")
-                } ?: connections.first()
+                } ?: bluetoothConnections.first()
                 
-                Log.d(TAG, "Selecionada impressora: ${preferredConnection.device.name}")
-                currentConnection = preferredConnection
-                preferredConnection
+                Log.d(TAG, "✓ Bluetooth encontrado: ${preferredBluetooth.device.name}")
+                currentConnection = preferredBluetooth
+                return preferredBluetooth
             }
             
-            // Calcula largura em pixels (203 DPI)
-            val widthPixels = if (paperWidth == 58) 384 else 576
+            Log.d(TAG, "✗ Nenhum Bluetooth encontrado")
             
-            return EscPosPrinter(connection, dpi, DEFAULT_WIDTH_MM, widthPixels)
+            // 2. Tentar USB (Moderninha Smart)
+            Log.d(TAG, "Tentando USB...")
+            val context = appContext.reactContext
+            
+            if (context != null) {
+                val usbManager = context.getSystemService(Context.USB_SERVICE) as? UsbManager
+                
+                if (usbManager != null) {
+                    val usbConnections = UsbPrintersConnections(context).list
+                    
+                    if (!usbConnections.isNullOrEmpty()) {
+                        val usbPrinter = usbConnections.first()
+                        val device = usbPrinter.device
+                        
+                        // Solicita permissão USB se necessário
+                        if (!usbManager.hasPermission(device)) {
+                            Log.d(TAG, "Solicitando permissão USB para auto-detect...")
+                            val granted = requestUsbPermission(context, usbManager, device)
+                            
+                            if (!granted) {
+                                Log.w(TAG, "Permissão USB negada")
+                                return null
+                            }
+                            
+                            Log.d(TAG, "Permissão USB concedida!")
+                        }
+                        
+                        Log.d(TAG, "✓ USB encontrado: ${device.deviceName}")
+                        currentConnection = usbPrinter
+                        return usbPrinter
+                    }
+                }
+            }
+            
+            Log.d(TAG, "✗ Nenhuma USB encontrada")
+            
+            Log.w(TAG, "Nenhuma impressora disponível (Bluetooth ou USB)")
+            return null
             
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ao criar printer: ${e.message}", e)
+            Log.e(TAG, "Erro ao buscar impressora: ${e.message}", e)
             return null
         }
+    }
+    
+    /**
+     * Solicita permissão USB e aguarda resposta do usuário
+     * Usa BroadcastReceiver para capturar a resposta do popup
+     */
+    private fun requestUsbPermission(context: Context, usbManager: UsbManager, device: UsbDevice): Boolean {
+        try {
+            // Cria latch para aguardar resposta
+            usbPermissionLatch = CountDownLatch(1)
+            usbPermissionGranted = false
+            
+            // Registra BroadcastReceiver para receber resposta
+            val receiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context, intent: Intent) {
+                    if (intent.action == ACTION_USB_PERMISSION) {
+                        synchronized(this) {
+                            val device: UsbDevice? = intent.getParcelableExtra(UsbManager.EXTRA_DEVICE)
+                            
+                            if (intent.getBooleanExtra(UsbManager.EXTRA_PERMISSION_GRANTED, false)) {
+                                Log.d(TAG, "Permissão USB CONCEDIDA pelo usuário")
+                                usbPermissionGranted = true
+                            } else {
+                                Log.w(TAG, "Permissão USB NEGADA pelo usuário")
+                                usbPermissionGranted = false
+                            }
+                            
+                            usbPermissionLatch?.countDown()
+                        }
+                    }
+                }
+            }
+            
+            // Registra receiver
+            val filter = IntentFilter(ACTION_USB_PERMISSION)
+            context.registerReceiver(receiver, filter)
+            
+            // Solicita permissão (compatível Android 7-14)
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_MUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
+            val permissionIntent = PendingIntent.getBroadcast(
+                context,
+                0,
+                Intent(ACTION_USB_PERMISSION),
+                flags
+            )
+            usbManager.requestPermission(device, permissionIntent)
+            
+            Log.d(TAG, "Aguardando resposta do usuário (popup USB)...")
+            
+            // Aguarda até 30 segundos pela resposta
+            val granted = usbPermissionLatch?.await(30, TimeUnit.SECONDS) ?: false
+            
+            // Remove receiver
+            try {
+                context.unregisterReceiver(receiver)
+            } catch (e: Exception) {
+                Log.w(TAG, "Erro ao remover receiver: ${e.message}")
+            }
+            
+            if (!granted) {
+                Log.w(TAG, "Timeout aguardando permissão USB")
+                return false
+            }
+            
+            return usbPermissionGranted
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao solicitar permissão USB: ${e.message}", e)
+            return false
+        }
+    }
+    
+    /**
+     * Executa impressão com retry automático para recuperar de Doze Mode
+     * Android 7 fecha sockets Bluetooth inativos, causando Broken Pipe
+     * 
+     * @param paperWidth Largura do papel (58 ou 80mm)
+     * @param dpi DPI da impressora
+     * @param printAction Ação de impressão a executar
+     */
+    private fun printWithRetry(paperWidth: Int, dpi: Int, printAction: (EscPosPrinter) -> Unit) {
+        var attempts = 0
+        var lastException: Exception? = null
+        
+        while (attempts < MAX_RETRY_ATTEMPTS) {
+            try {
+                val printer = getOrCreatePrinter(paperWidth, dpi)
+                
+                if (printer == null) {
+                    throw Exception("Nenhuma impressora conectada")
+                }
+                
+                printAction(printer)
+                return // Sucesso!
+                
+            } catch (e: IOException) {
+                lastException = e
+                val isBrokenPipe = e.message?.contains("Broken pipe", ignoreCase = true) == true ||
+                                   e.message?.contains("Socket closed", ignoreCase = true) == true
+                
+                if (isBrokenPipe && attempts < MAX_RETRY_ATTEMPTS - 1) {
+                    Log.w(TAG, "Socket fechado pelo Doze Mode. Reconectando... (tentativa ${attempts + 1}/$MAX_RETRY_ATTEMPTS)")
+                    
+                    // Força reconexão
+                    try {
+                        currentConnection?.disconnect()
+                    } catch (disconnectError: Exception) {
+                        Log.w(TAG, "Erro ao desconectar: ${disconnectError.message}")
+                    }
+                    
+                    currentConnection = null
+                    currentPrinter = null
+                    
+                    // Aguarda 500ms antes de reconectar
+                    Thread.sleep(500)
+                    
+                    attempts++
+                } else {
+                    throw e // Erro não recuperável ou tentativas esgotadas
+                }
+            } catch (e: Exception) {
+                lastException = e
+                throw e // Outros erros não são recuperáveis
+            }
+        }
+        
+        // Se chegou aqui, esgotou tentativas
+        throw lastException ?: Exception("Falha após $MAX_RETRY_ATTEMPTS tentativas")
     }
 }

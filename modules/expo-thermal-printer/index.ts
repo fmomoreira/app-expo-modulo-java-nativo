@@ -82,4 +82,42 @@ export async function disconnectPrinter(): Promise<PrintResult> {
   return await ExpoThermalPrinterModule.disconnectPrinter();
 }
 
+/**
+ * Execute printer self-test
+ * Prints a diagnostic page with alignments, formatting, accents and barcode
+ * @returns Promise with test result
+ */
+export async function selfTest(): Promise<PrintResult> {
+  return await ExpoThermalPrinterModule.selfTest();
+}
+
+export interface ReceiptItem {
+  name: string;
+  price: number;
+  quantity: number;
+}
+
+export interface ReceiptOptions {
+  cpf?: string;
+  total: number;
+  qrCodeUrl?: string;
+}
+
+/**
+ * Print a formatted fiscal receipt with products and QR code
+ * @param items - Array of products to print
+ * @param options - Receipt options (cpf, total, qrCodeUrl)
+ * @returns Promise with print result
+ */
+export async function printReceipt(
+  items: ReceiptItem[],
+  options: ReceiptOptions
+): Promise<PrintResult> {
+  return await ExpoThermalPrinterModule.printReceipt(items, {
+    cpf: options.cpf || '',
+    total: options.total,
+    qrCodeUrl: options.qrCodeUrl || 'https://reinodasorte.com.br',
+  });
+}
+
 export { ExpoThermalPrinterModule };

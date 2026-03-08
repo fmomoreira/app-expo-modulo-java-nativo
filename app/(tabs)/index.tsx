@@ -16,6 +16,7 @@ import {
   getPairedPrinters,
   connectPrinter,
   disconnectPrinter,
+  selfTest,
   PrinterDevice,
 } from '../../modules/expo-thermal-printer';
 
@@ -30,26 +31,52 @@ export default function HomeScreen() {
     }
 
     try {
-      if (Platform.Version >= 31) {
-        const granted = await PermissionsAndroid.requestMultiple([
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-          PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-        ]);
+      // Platform.Version é a ÚNICA fonte de verdade
+      const androidVersion = Platform.Version;
+      console.log(`[Permissions] Android Version: ${androidVersion}`);
 
-        return (
-          granted['android.permission.BLUETOOTH_SCAN'] === PermissionsAndroid.RESULTS.GRANTED &&
-          granted['android.permission.BLUETOOTH_CONNECT'] === PermissionsAndroid.RESULTS.GRANTED
-        );
+      if (androidVersion >= 31) {
+        // Android 12+ (API 31+) - Requer BLUETOOTH_CONNECT e BLUETOOTH_SCAN
+        console.log('[Permissions] Solicitando permissões Android 12+...');
+        
+        try {
+          const granted = await PermissionsAndroid.requestMultiple([
+            PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
+            PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
+            PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+          ]);
+
+          const scanGranted = granted['android.permission.BLUETOOTH_SCAN'] === PermissionsAndroid.RESULTS.GRANTED;
+          const connectGranted = granted['android.permission.BLUETOOTH_CONNECT'] === PermissionsAndroid.RESULTS.GRANTED;
+
+          console.log(`[Permissions] BLUETOOTH_SCAN: ${scanGranted ? 'GRANTED' : 'DENIED'}`);
+          console.log(`[Permissions] BLUETOOTH_CONNECT: ${connectGranted ? 'GRANTED' : 'DENIED'}`);
+
+          return scanGranted && connectGranted;
+        } catch (err) {
+          console.error('[Permissions] Erro ao solicitar permissões Android 12+:', err);
+          return false;
+        }
       } else {
-        const granted = await PermissionsAndroid.request(
-          PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION
-        );
+        // Android 7-11 (API 24-30) - Requer apenas ACCESS_COARSE_LOCATION
+        console.log('[Permissions] Solicitando permissões Android 7-11...');
+        
+        try {
+          const granted = await PermissionsAndroid.request(
+            PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION
+          );
 
-        return granted === PermissionsAndroid.RESULTS.GRANTED;
+          const isGranted = granted === PermissionsAndroid.RESULTS.GRANTED;
+          console.log(`[Permissions] ACCESS_COARSE_LOCATION: ${isGranted ? 'GRANTED' : 'DENIED'}`);
+
+          return isGranted;
+        } catch (err) {
+          console.error('[Permissions] Erro ao solicitar permissões Android 7-11:', err);
+          return false;
+        }
       }
     } catch (err) {
-      console.error('Erro ao solicitar permissões:', err);
+      console.error('[Permissions] Erro crítico ao verificar versão Android:', err);
       return false;
     }
   };
@@ -172,6 +199,27 @@ export default function HomeScreen() {
     }
   };
 
+  const handleSelfTest = async () => {
+    setLoading(true);
+    try {
+      const hasPermission = await requestBluetoothPermissions();
+      if (!hasPermission) {
+        Alert.alert('Erro', 'Permissões Bluetooth não concedidas');
+        return;
+      }
+
+      const result = await selfTest();
+
+      if (result.success) {
+        Alert.alert('Sucesso', 'Auto-teste concluído! Verifique a impressão.');
+      }
+    } catch (error: any) {
+      Alert.alert('Erro', error.message || 'Erro ao executar auto-teste');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <ScrollView style={styles.container}>
       <View style={styles.header}>
@@ -231,6 +279,14 @@ export default function HomeScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>2. Testar Impressão</Text>
         
+        <TouchableOpacity
+          style={[styles.button, styles.selfTestButton]}
+          onPress={handleSelfTest}
+          disabled={loading}
+        >
+          <Text style={styles.buttonText}>🔧 Auto-Teste (Diagnóstico)</Text>
+        </TouchableOpacity>
+
         <TouchableOpacity
           style={styles.button}
           onPress={handlePrintText}
@@ -324,6 +380,9 @@ const styles = StyleSheet.create({
   },
   disconnectButton: {
     backgroundColor: '#FF3B30',
+  },
+  selfTestButton: {
+    backgroundColor: '#34C759',
   },
   buttonText: {
     color: '#fff',

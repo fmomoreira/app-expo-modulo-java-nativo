@@ -102,17 +102,25 @@ class ExpoThermalPrinterModule : Module() {
                     return@AsyncFunction
                 }
                 
-                // Converte bitmap para comando ESC/POS e imprime
+                // Converte bitmap para comandos ESC/POS
                 Log.d(TAG, "Convertendo bitmap para comandos ESC/POS...")
-                val imageHex = PrinterTextParserImg.bitmapToHexadecimalString(printer, bitmap)
+                Log.d(TAG, "Dimensões finais do bitmap: ${bitmap.width}x${bitmap.height}")
                 
-                Log.d(TAG, "Enviando dados para impressora...")
-                printer.printFormattedText(
-                    "[C]<img>$imageHex</img>\n" +
-                    "[L]\n" +
-                    "[L]\n" +
-                    "[L]\n"
-                )
+                try {
+                    val imageString = PrinterTextParserImg.bitmapToHexadecimalString(printer, bitmap)
+                    Log.d(TAG, "Bitmap convertido para hexadecimal (${imageString.length} caracteres)")
+                    
+                    // Imprime a imagem centralizada
+                    printer.printFormattedText(
+                        "[C]<img>$imageString</img>\n\n\n",
+                        Charsets.ISO_8859_1
+                    )
+                    
+                    Log.d(TAG, "Impressão de imagem concluída com sucesso!")
+                } catch (e: Exception) {
+                    Log.e(TAG, "Erro ao converter/imprimir bitmap: ${e.message}", e)
+                    throw Exception("Falha na conversão ESC/POS: ${e.message}")
+                }
                 
                 // Libera memória do Bitmap (importante para maquininhas com pouca RAM)
                 bitmap?.recycle()
@@ -280,22 +288,29 @@ class ExpoThermalPrinterModule : Module() {
                         
                         if (usbConn != null) {
                             val device = usbConn.device
+                            Log.d(TAG, "Impressora USB encontrada: ${device.deviceName} (ID: ${device.deviceId})")
                             
                             // Solicita permissão USB se necessário
                             if (!usbManager.hasPermission(device)) {
-                                Log.d(TAG, "Solicitando permissão USB...")
+                                Log.d(TAG, "Solicitando permissão USB ao usuário...")
                                 val granted = requestUsbPermission(context, usbManager, device)
                                 
                                 if (!granted) {
+                                    Log.e(TAG, "Permissão USB NEGADA pelo usuário")
                                     promise.reject("USB_PERMISSION_DENIED", "Permissão USB negada pelo usuário", null)
                                     return@AsyncFunction
                                 }
                                 
-                                Log.d(TAG, "Permissão USB concedida!")
+                                Log.d(TAG, "✓ Permissão USB CONCEDIDA!")
+                            } else {
+                                Log.d(TAG, "✓ Permissão USB já concedida anteriormente")
                             }
                             
                             connection = usbConn
                             printerName = device.deviceName ?: "USB Printer"
+                            Log.d(TAG, "Conexão USB preparada: $printerName")
+                        } else {
+                            Log.e(TAG, "Impressora USB com ID $deviceId não encontrada")
                         }
                     }
                 } 
@@ -355,8 +370,81 @@ class ExpoThermalPrinterModule : Module() {
         }
         
         /**
+         * Imprime um cupom fiscal formatado com produtos e QR code
+         * 
+         * @param items Lista de produtos [{name, price, quantity}]
+         * @param options Opções (cpf, total, qrCodeUrl)
+         * @param promise Promise para retornar resultado
+         */
+        AsyncFunction("printReceipt") { items: List<Map<String, Any>>, options: Map<String, Any>, promise: Promise ->
+            try {
+                Log.d(TAG, "Iniciando impressão de cupom fiscal...")
+                
+                val printer = getOrCreatePrinter(58, DEFAULT_DPI)
+                
+                if (printer == null) {
+                    promise.reject("NO_PRINTER", "Nenhuma impressora conectada", null)
+                    return@AsyncFunction
+                }
+                
+                val cpf = options["cpf"] as? String ?: ""
+                val total = options["total"] as? Double ?: 0.0
+                val qrCodeUrl = options["qrCodeUrl"] as? String ?: "https://reinodasorte.com.br"
+                
+                val receiptText = buildString {
+                    append("[C]================================\n")
+                    append("[C]<b>CUPOM FISCAL</b>\n")
+                    append("[C]================================\n\n")
+                    
+                    if (cpf.isNotEmpty()) {
+                        append("[L]CPF: $cpf\n")
+                        append("[L]--------------------------------\n")
+                    }
+                    
+                    append("[L]<b>PRODUTO</b>[R]<b>VALOR</b>\n")
+                    append("[L]--------------------------------\n")
+                    
+                    items.forEach { item ->
+                        val name = item["name"] as? String ?: "Produto"
+                        val price = item["price"] as? Double ?: 0.0
+                        val quantity = item["quantity"] as? Int ?: 1
+                        val itemTotal = price * quantity
+                        
+                        append("[L]$name\n")
+                        append("[L]  ${quantity}x R$ %.2f[R]R$ %.2f\n".format(price, itemTotal))
+                    }
+                    
+                    append("[L]--------------------------------\n")
+                    append("[L]<b>TOTAL</b>[R]<b>R$ %.2f</b>\n".format(total))
+                    append("[L]================================\n\n")
+                    
+                    append("[C]Acesse nosso site:\n")
+                    append("[C]<qrcode size='20'>$qrCodeUrl</qrcode>\n\n")
+                    append("[C]$qrCodeUrl\n\n")
+                    
+                    append("[C]Obrigado pela preferência!\n\n\n")
+                }
+                
+                printer.printFormattedText(receiptText, Charsets.ISO_8859_1)
+                
+                Log.d(TAG, "Cupom fiscal impresso com sucesso!")
+                
+                promise.resolve(
+                    mapOf(
+                        "success" to true,
+                        "message" to "Cupom fiscal impresso com sucesso!"
+                    )
+                )
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Erro ao imprimir cupom: ${e.message}", e)
+                promise.reject("RECEIPT_ERROR", e.message ?: "Erro ao imprimir cupom", e)
+            }
+        }
+        
+        /**
          * Executa auto-teste da impressora
-         * Imprime página de diagnóstico com alinhamentos, formatações e código de barras
+         * Imprime página de diagnóstico com alinhamentos, formatação, acentuação e código de barras
          * 
          * @param promise Promise para retornar resultado
          */

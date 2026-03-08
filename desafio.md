@@ -1,92 +1,68 @@
-O Gemini disse
-Felipe, o seu app.json está super limpo e configurado com as tecnologias mais modernas do Expo (como o reactCompiler e a newArchEnabled ativados). Excelente base!
+Estudo de Implementação: React Native + Kotlin (Moderninha Smart 2)
+Este estudo detalha a análise da arquitetura atual do app React Native e do módulo nativo Kotlin focado na compatibilidade com terminal Moderninha Smart 2 (sistema baseado no Android 7 - API 24).
 
-No entanto, como prevíamos, neste momento ele é um aplicativo "cego" para o hardware. O sistema Android não vai deixar o seu código Kotlin encostar no Bluetooth ou na porta USB sem que isso esteja declarado aqui.
+1. Arquitetura Atual
+O projeto é construído através do Expo com a New Architecture ativada e utiliza chamadas diretas com um módulo nativo construído com as abstrações do expo-modules-core. No universo nativo, há uma abstração rica focada na impressão via ESC/POS através da biblioteca com.github.DantSu:ESCPOS-ThermalPrinter-Android:3.3.0.
 
-Aqui está o que precisamos fazer: vamos adicionar o bloco "permissions" dentro da chave "android".
+A descoberta ocorre priorizando requisições Bluetooth primeiro, e USB como fallback, listando e buscando dispositivos cujos nomes match (innerprinter, mpos, moderninha, printer).
 
-1. O seu app.json atualizado
-Copie o bloco abaixo e substitua no seu arquivo. Eu adicionei as permissões exatas que cobrem desde as Moderninhas mais antigas (Android 7) até os celulares mais novos (Android 12+ que exigem o BLUETOOTH_CONNECT):
+2. Desafios de Compatibilidade e Permissões (Android 7 a Android 14)
+2.1 Conflito de Permissões de Bluetooth
+O 
+app.json
+ declara um conjunto robusto de permissões:
 
-JSON
-{
-  "expo": {
-    "name": "Thermal Printer App",
-    "slug": "thermal-printer-native-app",
-    "version": "1.0.0",
-    "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
-    "scheme": "printapp",
-    "userInterfaceStyle": "automatic",
-    "newArchEnabled": true,
-    "ios": {
-      "supportsTablet": true
-    },
-    "android": {
-      "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/android-icon-foreground.png",
-        "backgroundImage": "./assets/images/android-icon-background.png",
-        "monochromeImage": "./assets/images/android-icon-monochrome.png"
-      },
-      "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false,
-      "package": "com.fmomoreira2021.printapp",
-      "permissions": [
-        "android.permission.BLUETOOTH",
-        "android.permission.BLUETOOTH_ADMIN",
-        "android.permission.BLUETOOTH_CONNECT",
-        "android.permission.BLUETOOTH_SCAN",
-        "android.permission.ACCESS_COARSE_LOCATION",
-        "android.permission.ACCESS_FINE_LOCATION"
-      ]
-    },
-    "web": {
-      "output": "static",
-      "favicon": "./assets/images/favicon.png"
-    },
-    "plugins": [
-      "expo-router",
-      [
-        "expo-splash-screen",
-        {
-          "image": "./assets/images/splash-icon.png",
-          "imageWidth": 200,
-          "resizeMode": "contain",
-          "backgroundColor": "#ffffff",
-          "dark": {
-            "backgroundColor": "#000000"
-          }
-        }
-      ]
-    ],
-    "experiments": {
-      "typedRoutes": true,
-      "reactCompiler": true
-    },
-    "extra": {
-      "router": {},
-      "eas": {
-        "projectId": "d363f2e1-06b2-4b82-9931-a171cb7529bd"
-      }
-    }
-  }
-}
-(Nota técnica: O Android exige a permissão de "Localização" (ACCESS_FINE_LOCATION) porque, teoricamente, ao escanear dispositivos Bluetooth, um app poderia deduzir a localização física do usuário baseado nos aparelhos ao redor).
+json
+"android.permission.BLUETOOTH",
+"android.permission.BLUETOOTH_ADMIN",
+"android.permission.BLUETOOTH_CONNECT",
+"android.permission.BLUETOOTH_SCAN",
+"android.permission.ACCESS_COARSE_LOCATION",
+"android.permission.ACCESS_FINE_LOCATION"
+Análise para a Moderninha (Android 7 - SDK 24):
 
-2. O Toque Final para o USB (Moderninha Smart)
-O app.json cuida das permissões de software, mas para o Android liberar o acesso ao cabo USB/Hardware interno, precisamos declarar uma "Feature" (Recurso).
+As permissões BLUETOOTH_CONNECT e BLUETOOTH_SCAN são exclusivas do Android 12 (SDK 31+). Sistemas antigos como o Android 7 irão simplesmente ignorar essas permissões na manifest, pois os tokens são desconhecidos para eles.
+Para o Android 7, a busca e pareamento de impressoras operam perfeitamente apenas com a dupla genérica de BLUETOOTH/ADMIN e de ACCESS_COARSE/FINE_LOCATION.
+Melhoria no App Nível React Native: Se você usar bibliotecas Javascript que acionam popups de autorização (como expo-location ou checagem manual pelo PermissionsAndroid do RN), certifique-se de não exigir que as permissões do Android 12 retornem "GRANDE/AUTHORIZED" quando rodarem na maquininha, pois resultarão sempre em undefined ou erro, bloqueando seu usuário.
+2.2 Descoberta do Broadcast no Android (PendigIntent Mutável)
+No arquivo 
+ExpoThermalPrinterModule.kt
+, para criar prompt ao usuário caso uma impressora USB seja detectada:
 
-Como você está criando um módulo local, a forma mais limpa e profissional de fazer isso é direto no manifesto do seu módulo Kotlin.
+kotlin
+val permissionIntent = PendingIntent.getBroadcast(
+    context, 0, Intent(ACTION_USB_PERMISSION), PendingIntent.FLAG_MUTABLE
+)
+A const FLAG_MUTABLE foi padronizada no API 31+ para reforço de segurança. Com o targetSdkVersion 34 do módulo (no gradle), isso passa no build Kotlin, porém rodando de fato em um terminal Android 7 algumas bibliotecas ou ROMs customizadas do fabricante UOL/PagSeguro às vezes enfrentam crashes com flags que não conhecem.
+Melhoria: O ideal e mais seguro para suportar de Android 7 a 14 é identificar e condicionar isso no runtime, utilizando por exemplo abstrações mais genéricas ou os modificadores providos pelo PendingIntent.FLAG_UPDATE_CURRENT adicionados condicionalmente à versão rodando se houver travamento ao chamar o RequestPermission do USB.
+3. Melhorias no Fluxo de Conexões e Impressoras Internas (InnerPrinters)
+3.1 Caching de Estado do Socket (Fuga de Bateria e "Broken Pipe")
+Atualmente, no Android 7 agressivo em seu Doze Mode (Dormência), conexões Bluetooth contínuas ativas podem receber um encerramento forçado do SO para salvar bateria. Se isso ocorre, a Promise do tipo "printImage" via o currentPrinter?.printFormattedText disparará uma Exception de Broken Pipe.
 
-Na pasta do seu módulo, navegue até android/src/main/ e crie (ou edite se já existir) um arquivo chamado AndroidManifest.xml com este conteúdo:
+Melhoria no Kotlin: No método connectPrinter e dentro dos prints, envolver os processos destas impressoras Moderninhas em blocos com "Mecanismo de Auto-Reconnect (Retry)". Desconecte forçadamente o socket e instancie um novo EscPosPrinter(connection...) imediatamente se o bloco try falhar com socket fechado, prevenindo que o usuário tenha que clicar num botão "Sincronizar Impressoras" de novo visualmente.
+3.2 Melhor Comunicação com os Terminais POS UOL / PagSeguro
+Esses terminais rodam Androids severamente engessados ("locked down" devices).
 
-XML
-<manifest xmlns:android="http://schemas.android.com/apk/res/android"
-          package="expo.modules.thermalprinter">
-    
-    <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+O código atual assume no método 
+findAnyAvailablePrinter()
+ que a impressora está sempre presente nas interfaces listadas via adapter Bluetooth tradicional (como pareados) ou via barramento USB.
+Para essas impressoras embutidas, a biblioteca Dantsu consegue enviar comandos corretamente contanto que as impressoras internas se auto-apresentem pro Adapter Bluetooth do Android! E elas geralmente fazem. A linha com name.contains("innerprinter") é uma ótima heurística. Cuidado constante apenas para que as máquinas menores (que não Moderninha Smart 2 e sim concorrentes) não tentem acessar via USB simultâneo limitando os modems.
+3.3 Particularidades dos Terminais SUNMI (Sunmi Inner Printer)
+Muitas máquinas de cartão (incluindo modelos base da própria Moderninha e similares do mercado, como V2, P2) são, na verdade, hardwares fabricados pela SUNMI.
 
-</manifest>
-O android:required="false" é importante para que a Google Play Store não bloqueie a instalação em celulares que não suportam USB Host.
+Como aparecem na listagem: A SUNMI implementa sua impressora térmica interna emulando um dispositivo Bluetooth virtual. Esse dispositivo já vem pré-pareado e cravado na ROM do Android, exposto frequentemente sob o nome "InnerPrinter" ou "SUNMI_PRINTER".
+Diferença de Listagem e Scan: Faz extrema diferença, pois por serem Bluetooth Virtuais, elas não aparecerão se listarmos apenas portas USB e não requerem um scan ativo de redes (BLUETOOTH_SCAN). Elas sempre figuram na lista de dispositivos Bound/Paired do BluetoothAdapter nativo.
+O que o atual código já faz de melhor: No Kotlin, a heurística de fallback name.contains("innerprinter") aplicada na função 
+findAnyAvailablePrinter()
+ é precisamente o "atalho" excelente para auto-detectar o terminal Sunmi e iniciar a instância ESC/POS sem o usuário intervir.
+Dica Futura: Se os fabricantes bloquearem a porta Bluetooth virtual (como algumas custom-ROMs bancárias trazem), a alternativa final oficial da Sunmi obriga integração via SunmiPrinterService (serviço AIDL rodando em background no app), mas para 99% das variantes, usar a ponte de Bluetooth virtual poupa muito tempo.
+3.4 Sugestão Rápida para Estabilidade Visual e de Memória
+A Moderninha Smart 2 detém escassez de recursos RAM em relação a celulares atuais:
 
+O fluxo de Dithering do Kotlin (o arquivo 
+ImageUtils.kt
+) lidando com arrays de dimensões enormes (Imagens Base64 ou de Câmera) pode ocasionar "Out Of Memory" (OOM).
+A sua precaução atual implementada ao final de printImage com bitmap?.recycle() está muito bem feita. Permaneça focando nestes frees de memória nos Modulos do Kotlin para otimizar aparelhos mais fracos como os Androids 7.
+
+Comment
+Ctrl+Alt+M

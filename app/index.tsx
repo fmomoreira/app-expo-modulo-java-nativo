@@ -53,20 +53,37 @@ export default function PDVScreen() {
     try {
       const androidVersion = Platform.Version;
       
+      // Android 12+ (API 31+): BLUETOOTH_SCAN + BLUETOOTH_CONNECT
+      // NÃO precisa de localização se usar neverForLocation no Manifest
       if (androidVersion >= 31) {
+        console.log('[Permissions] Android 12+ detectado - Solicitando BLUETOOTH_SCAN e BLUETOOTH_CONNECT');
         const granted = await PermissionsAndroid.requestMultiple([
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-          PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
         ]);
-        return granted['android.permission.BLUETOOTH_CONNECT'] === PermissionsAndroid.RESULTS.GRANTED;
-      } else {
+        
+        const scanGranted = granted['android.permission.BLUETOOTH_SCAN'] === PermissionsAndroid.RESULTS.GRANTED;
+        const connectGranted = granted['android.permission.BLUETOOTH_CONNECT'] === PermissionsAndroid.RESULTS.GRANTED;
+        
+        console.log('[Permissions] BLUETOOTH_SCAN:', scanGranted);
+        console.log('[Permissions] BLUETOOTH_CONNECT:', connectGranted);
+        
+        return scanGranted && connectGranted;
+      } 
+      // Android 7-11 (API 24-30): ACCESS_COARSE_LOCATION
+      else {
+        console.log('[Permissions] Android 7-11 detectado - Solicitando ACCESS_COARSE_LOCATION');
         const granted = await PermissionsAndroid.request(
           PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION
         );
-        return granted === PermissionsAndroid.RESULTS.GRANTED;
+        
+        const locationGranted = granted === PermissionsAndroid.RESULTS.GRANTED;
+        console.log('[Permissions] ACCESS_COARSE_LOCATION:', locationGranted);
+        
+        return locationGranted;
       }
     } catch (err) {
+      console.error('[Permissions] Erro ao solicitar permissões:', err);
       return false;
     }
   };

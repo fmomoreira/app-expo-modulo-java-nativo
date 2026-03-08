@@ -16,6 +16,7 @@ object ImageUtils {
      * em preto e branco puro (1-bit) com qualidade profissional
      * 
      * Este é o mesmo algoritmo usado pelo RawBT para garantir nitidez em impressoras térmicas
+     * OTIMIZAÇÃO: Libera memória do bitmap original após criar cópia
      * 
      * @param source Bitmap original (colorido ou tons de cinza)
      * @return Bitmap processado em preto e branco puro
@@ -24,8 +25,15 @@ object ImageUtils {
         val width = source.width
         val height = source.height
         
-        // Cria uma cópia mutável da imagem
+        // Cria uma cópia mutável da imagem. Precisamos disso porque vamos
+        // alterar pixel por pixel e a imagem original pode estar "trancada" na memória.
         val bitmap = source.copy(Bitmap.Config.ARGB_8888, true)
+        
+        // Libera a original, pois só vamos trabalhar na cópia a partir de agora
+        // CRÍTICO para maquininhas com pouca RAM (Moderninha: 1-2GB)
+        if (bitmap != source) {
+            source.recycle()
+        }
         
         // Array para armazenar valores de luminância (mais eficiente que acessar pixels repetidamente)
         val luminanceArray = Array(height) { IntArray(width) }
@@ -113,6 +121,7 @@ object ImageUtils {
     
     /**
      * Redimensiona a imagem para a largura da bobina térmica
+     * OTIMIZAÇÃO: Libera memória do bitmap original para evitar OutOfMemory em maquininhas
      * 
      * @param source Bitmap original
      * @param paperWidth Largura do papel em mm (58 ou 80)
@@ -123,11 +132,24 @@ object ImageUtils {
         // 80mm = 576 pixels @ 203 DPI
         val targetWidth = if (paperWidth == 58) 384 else 576
         
+        // OTIMIZAÇÃO: Se a imagem já for menor ou igual à bobina, não faz nada para poupar memória
+        if (source.width <= targetWidth) {
+            return source
+        }
+        
         // Mantém a proporção da imagem
         val aspectRatio = source.height.toFloat() / source.width.toFloat()
         val targetHeight = (targetWidth * aspectRatio).toInt()
         
-        return Bitmap.createScaledBitmap(source, targetWidth, targetHeight, true)
+        val resizedBitmap = Bitmap.createScaledBitmap(source, targetWidth, targetHeight, true)
+        
+        // DICA DE OURO PARA MEMÓRIA: Se a imagem nova é diferente da velha,
+        // destruímos a velha para liberar RAM da maquininha (importante para Moderninha com 1-2GB RAM)
+        if (resizedBitmap != source) {
+            source.recycle()
+        }
+        
+        return resizedBitmap
     }
     
     /**

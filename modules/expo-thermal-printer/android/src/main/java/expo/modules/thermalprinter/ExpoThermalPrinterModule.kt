@@ -7,10 +7,14 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.bluetooth.BluetoothAdapter
 import android.hardware.usb.UsbDevice
 import android.hardware.usb.UsbManager
+import android.os.Build
 import android.util.Base64
 import android.util.Log
+import java.io.IOException
+import java.nio.charset.Charset
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import com.dantsu.escposprinter.EscPosPrinter
@@ -40,6 +44,7 @@ class ExpoThermalPrinterModule : Module() {
         private const val DEFAULT_DPI = 203
         private const val DEFAULT_WIDTH_MM = 48f
         private const val ACTION_USB_PERMISSION = "expo.modules.thermalprinter.USB_PERMISSION"
+        private const val MAX_RETRY_ATTEMPTS = 2
     }
     
     private var currentConnection: DeviceConnection? = null
@@ -58,6 +63,7 @@ class ExpoThermalPrinterModule : Module() {
          * @param promise Promise para retornar resultado
          */
         AsyncFunction("printImage") { base64Image: String, options: Map<String, Any>, promise: Promise ->
+            var bitmap: Bitmap? = null
             try {
                 Log.d(TAG, "Iniciando processo de impressão de imagem...")
                 
@@ -71,7 +77,7 @@ class ExpoThermalPrinterModule : Module() {
                 // Decodifica Base64 para Bitmap
                 Log.d(TAG, "Decodificando imagem Base64...")
                 val decodedBytes = Base64.decode(base64Image, Base64.DEFAULT)
-                var bitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+                bitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
                 
                 if (bitmap == null) {
                     Log.e(TAG, "Falha ao decodificar imagem Base64")
@@ -93,40 +99,24 @@ class ExpoThermalPrinterModule : Module() {
                     Log.d(TAG, "Dithering aplicado com sucesso")
                 }
                 
-                // Conecta à impressora
-                val printer = getOrCreatePrinter(paperWidth, dpi)
+                // Captura bitmap final para uso no retry
+                val finalBitmap = bitmap
                 
-                if (printer == null) {
-                    Log.e(TAG, "Nenhuma impressora disponível")
-                    promise.reject("NO_PRINTER", "Nenhuma impressora Bluetooth pareada encontrada", null)
-                    return@AsyncFunction
-                }
-                
-                // Converte bitmap para comandos ESC/POS
-                Log.d(TAG, "Convertendo bitmap para comandos ESC/POS...")
-                Log.d(TAG, "Dimensões finais do bitmap: ${bitmap.width}x${bitmap.height}")
-                
-                try {
-                    val imageString = PrinterTextParserImg.bitmapToHexadecimalString(printer, bitmap)
+                // Usa printWithRetry para auto-recover de Doze Mode
+                printWithRetry(paperWidth, dpi) { printer ->
+                    Log.d(TAG, "Convertendo bitmap para comandos ESC/POS...")
+                    Log.d(TAG, "Dimensões finais do bitmap: ${finalBitmap.width}x${finalBitmap.height}")
+                    
+                    val imageString = PrinterTextParserImg.bitmapToHexadecimalString(printer, finalBitmap)
                     Log.d(TAG, "Bitmap convertido para hexadecimal (${imageString.length} caracteres)")
                     
                     // Imprime a imagem centralizada
                     printer.printFormattedText(
-                        "[C]<img>$imageString</img>\n\n\n",
-                        Charsets.ISO_8859_1
+                        "[C]<img>$imageString</img>\n\n\n"
                     )
                     
                     Log.d(TAG, "Impressão de imagem concluída com sucesso!")
-                } catch (e: Exception) {
-                    Log.e(TAG, "Erro ao converter/imprimir bitmap: ${e.message}", e)
-                    throw Exception("Falha na conversão ESC/POS: ${e.message}")
                 }
-                
-                // Libera memória do Bitmap (importante para maquininhas com pouca RAM)
-                bitmap?.recycle()
-                Log.d(TAG, "Memória do Bitmap liberada.")
-                
-                Log.d(TAG, "Impressão concluída com sucesso!")
                 
                 promise.resolve(
                     mapOf(
@@ -138,6 +128,10 @@ class ExpoThermalPrinterModule : Module() {
             } catch (e: Exception) {
                 Log.e(TAG, "Erro durante impressão: ${e.message}", e)
                 promise.reject("PRINT_ERROR", e.message ?: "Erro desconhecido durante impressão", e)
+            } finally {
+                // Libera memória do Bitmap SEMPRE (importante para maquininhas com pouca RAM)
+                bitmap?.recycle()
+                Log.d(TAG, "Memória do Bitmap liberada.")
             }
         }
         
@@ -154,20 +148,19 @@ class ExpoThermalPrinterModule : Module() {
                 
                 val paperWidth = (options["paperWidth"] as? Int) ?: 58
                 val encoding = (options["encoding"] as? String) ?: "ISO-8859-1"
+                val dpi = (options["dpi"] as? Int) ?: DEFAULT_DPI
                 
-                val printer = getOrCreatePrinter(paperWidth, DEFAULT_DPI)
-                
-                if (printer == null) {
-                    promise.reject("NO_PRINTER", "Nenhuma impressora disponível", null)
-                    return@AsyncFunction
+                val charset = when(encoding.uppercase()) {
+                    "UTF-8" -> Charsets.UTF_8
+                    "CP850" -> Charset.forName("CP850")
+                    else -> Charsets.ISO_8859_1
                 }
                 
-                // Usa Code Page 850 para acentuação brasileira (ç, á, é, etc)
-                printer.printFormattedText(
-                    "[C]<font cp=\"850\"><b>$text</b></font>\n" +
-                    "[L]\n" +
-                    "[L]\n"
-                )
+                // Usa printWithRetry para auto-recover de Doze Mode
+                printWithRetry(paperWidth, dpi) { printer ->
+                    printer.printFormattedText(text)
+                    Log.d(TAG, "Texto impresso com sucesso")
+                }
                 
                 promise.resolve(
                     mapOf(
@@ -195,18 +188,33 @@ class ExpoThermalPrinterModule : Module() {
                 // 1. Buscar impressoras Bluetooth
                 try {
                     Log.d(TAG, "Verificando impressoras Bluetooth...")
-                    val bluetoothConnections = BluetoothPrintersConnections().list ?: emptyArray()
                     
-                    bluetoothConnections.forEach { connection ->
-                        val device = connection.device
-                        printersList.add(mapOf(
-                            "name" to (device.name ?: "Bluetooth Desconhecido"),
-                            "address" to device.address,
-                            "type" to "bluetooth"
-                        ))
+                    // Verificar se Bluetooth está habilitado
+                    val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+                    if (bluetoothAdapter == null) {
+                        Log.w(TAG, "⚠️ Dispositivo não possui Bluetooth")
+                    } else if (!bluetoothAdapter.isEnabled) {
+                        Log.w(TAG, "⚠️ Bluetooth está DESLIGADO. Peça ao usuário para ligar.")
+                    } else {
+                        Log.d(TAG, "✓ Bluetooth está LIGADO")
+                        val bondedDevices = bluetoothAdapter.bondedDevices
+                        Log.d(TAG, "Dispositivos pareados: ${bondedDevices?.size ?: 0}")
+                        
+                        // CORREÇÃO: Listar TODOS os dispositivos pareados diretamente
+                        // A biblioteca DantSu filtra demais e não detecta InnerPrinter
+                        bondedDevices?.forEach { device ->
+                            Log.d(TAG, "  - ${device.name} (${device.address})")
+                            
+                            // Adicionar TODOS os dispositivos pareados à lista
+                            printersList.add(mapOf(
+                                "name" to (device.name ?: "Bluetooth Desconhecido"),
+                                "address" to device.address,
+                                "type" to "bluetooth"
+                            ))
+                        }
+                        
+                        Log.d(TAG, "Listadas ${bondedDevices?.size ?: 0} impressoras Bluetooth pareadas")
                     }
-                    
-                    Log.d(TAG, "Encontradas ${bluetoothConnections.size} impressoras Bluetooth")
                 } catch (e: Exception) {
                     Log.w(TAG, "Erro ao buscar Bluetooth: ${e.message}")
                 }
@@ -317,9 +325,31 @@ class ExpoThermalPrinterModule : Module() {
                 // Bluetooth
                 else {
                     Log.d(TAG, "Buscando impressora Bluetooth...")
+                    
+                    // Tentar primeiro com a biblioteca DantSu
                     val bluetoothConnections = BluetoothPrintersConnections().list ?: emptyArray()
                     connection = bluetoothConnections.find { it.device.address == address }
-                    printerName = (connection as? BluetoothConnection)?.device?.name ?: "Bluetooth Printer"
+                    
+                    // Se não encontrou, criar conexão manualmente usando BluetoothAdapter
+                    if (connection == null) {
+                        Log.d(TAG, "Biblioteca DantSu não encontrou. Tentando BluetoothAdapter...")
+                        val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+                        
+                        if (bluetoothAdapter != null && bluetoothAdapter.isEnabled) {
+                            val bondedDevices = bluetoothAdapter.bondedDevices
+                            val targetDevice = bondedDevices?.find { it.address == address }
+                            
+                            if (targetDevice != null) {
+                                Log.d(TAG, "✓ Dispositivo encontrado: ${targetDevice.name}")
+                                connection = BluetoothConnection(targetDevice)
+                                printerName = targetDevice.name ?: "Bluetooth Printer"
+                            } else {
+                                Log.e(TAG, "Dispositivo $address não está pareado")
+                            }
+                        }
+                    } else {
+                        printerName = (connection as? BluetoothConnection)?.device?.name ?: "Bluetooth Printer"
+                    }
                 }
                 
                 if (connection == null) {
@@ -425,7 +455,7 @@ class ExpoThermalPrinterModule : Module() {
                     append("[C]Obrigado pela preferência!\n\n\n")
                 }
                 
-                printer.printFormattedText(receiptText, Charsets.ISO_8859_1)
+                printer.printFormattedText(receiptText)
                 
                 Log.d(TAG, "Cupom fiscal impresso com sucesso!")
                 
@@ -568,13 +598,27 @@ class ExpoThermalPrinterModule : Module() {
         try {
             // 1. Tentar Bluetooth primeiro
             Log.d(TAG, "Tentando Bluetooth...")
+            
+            // Verificar se Bluetooth está habilitado
+            val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
+            if (bluetoothAdapter == null) {
+                Log.w(TAG, "⚠️ Dispositivo não possui Bluetooth")
+                return null
+            }
+            if (!bluetoothAdapter.isEnabled) {
+                Log.w(TAG, "⚠️ Bluetooth está DESLIGADO")
+                return null
+            }
+            
+            Log.d(TAG, "✓ Bluetooth habilitado, buscando impressoras pareadas...")
             val bluetoothConnections = BluetoothPrintersConnections().list
             
             if (!bluetoothConnections.isNullOrEmpty()) {
-                // Prioriza impressoras com nomes conhecidos
+                // Prioriza impressoras com nomes conhecidos (incluindo SUNMI)
                 val preferredBluetooth = bluetoothConnections.find { 
                     val name = it.device.name?.lowercase() ?: ""
                     name.contains("innerprinter") || 
+                    name.contains("sunmi") ||
                     name.contains("mpos") || 
                     name.contains("moderninha") ||
                     name.contains("printer")
@@ -667,12 +711,17 @@ class ExpoThermalPrinterModule : Module() {
             val filter = IntentFilter(ACTION_USB_PERMISSION)
             context.registerReceiver(receiver, filter)
             
-            // Solicita permissão
+            // Solicita permissão (compatível Android 7-14)
+            val flags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                PendingIntent.FLAG_MUTABLE
+            } else {
+                PendingIntent.FLAG_UPDATE_CURRENT
+            }
             val permissionIntent = PendingIntent.getBroadcast(
                 context,
                 0,
                 Intent(ACTION_USB_PERMISSION),
-                PendingIntent.FLAG_MUTABLE
+                flags
             )
             usbManager.requestPermission(device, permissionIntent)
             
@@ -699,5 +748,63 @@ class ExpoThermalPrinterModule : Module() {
             Log.e(TAG, "Erro ao solicitar permissão USB: ${e.message}", e)
             return false
         }
+    }
+    
+    /**
+     * Executa impressão com retry automático para recuperar de Doze Mode
+     * Android 7 fecha sockets Bluetooth inativos, causando Broken Pipe
+     * 
+     * @param paperWidth Largura do papel (58 ou 80mm)
+     * @param dpi DPI da impressora
+     * @param printAction Ação de impressão a executar
+     */
+    private fun printWithRetry(paperWidth: Int, dpi: Int, printAction: (EscPosPrinter) -> Unit) {
+        var attempts = 0
+        var lastException: Exception? = null
+        
+        while (attempts < MAX_RETRY_ATTEMPTS) {
+            try {
+                val printer = getOrCreatePrinter(paperWidth, dpi)
+                
+                if (printer == null) {
+                    throw Exception("Nenhuma impressora conectada")
+                }
+                
+                printAction(printer)
+                return // Sucesso!
+                
+            } catch (e: IOException) {
+                lastException = e
+                val isBrokenPipe = e.message?.contains("Broken pipe", ignoreCase = true) == true ||
+                                   e.message?.contains("Socket closed", ignoreCase = true) == true
+                
+                if (isBrokenPipe && attempts < MAX_RETRY_ATTEMPTS - 1) {
+                    Log.w(TAG, "Socket fechado pelo Doze Mode. Reconectando... (tentativa ${attempts + 1}/$MAX_RETRY_ATTEMPTS)")
+                    
+                    // Força reconexão
+                    try {
+                        currentConnection?.disconnect()
+                    } catch (disconnectError: Exception) {
+                        Log.w(TAG, "Erro ao desconectar: ${disconnectError.message}")
+                    }
+                    
+                    currentConnection = null
+                    currentPrinter = null
+                    
+                    // Aguarda 500ms antes de reconectar
+                    Thread.sleep(500)
+                    
+                    attempts++
+                } else {
+                    throw e // Erro não recuperável ou tentativas esgotadas
+                }
+            } catch (e: Exception) {
+                lastException = e
+                throw e // Outros erros não são recuperáveis
+            }
+        }
+        
+        // Se chegou aqui, esgotou tentativas
+        throw lastException ?: Exception("Falha após $MAX_RETRY_ATTEMPTS tentativas")
     }
 }

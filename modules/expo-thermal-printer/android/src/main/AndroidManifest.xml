@@ -1,0 +1,18 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+  <!-- Permissões para Bluetooth (Android 7+) -->
+  <uses-permission android:name="android.permission.BLUETOOTH" />
+  <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" />
+  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
+  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
+  
+  <!-- Permissões para Bluetooth (Android 12+) -->
+  <uses-permission android:name="android.permission.BLUETOOTH_SCAN" 
+                   android:usesPermissionFlags="neverForLocation" />
+  <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+  
+  <!-- Permissão para USB -->
+  <uses-permission android:name="android.permission.USB_PERMISSION" />
+  
+  <uses-feature android:name="android.hardware.bluetooth" android:required="false" />
+  <uses-feature android:name="android.hardware.usb.host" android:required="false" />
+</manifest>

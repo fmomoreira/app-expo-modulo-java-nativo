@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "print-app",
-    "slug": "print-app",
+    "name": "Thermal Printer App",
+    "slug": "thermal-printer-native-app",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -19,7 +19,8 @@
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
       "edgeToEdgeEnabled": true,
-      "predictiveBackGestureEnabled": false
+      "predictiveBackGestureEnabled": false,
+      "package": "com.fmomoreira2021.printapp"
     },
     "web": {
       "output": "static",
@@ -43,6 +44,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "d363f2e1-06b2-4b82-9931-a171cb7529bd"
+      }
     }
   }
 }

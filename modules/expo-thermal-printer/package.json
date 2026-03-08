@@ -1,0 +1,22 @@
+{
+  "name": "expo-thermal-printer",
+  "version": "1.0.0",
+  "description": "Native thermal printer module for React Native with ESC/POS support",
+  "main": "index.ts",
+  "scripts": {
+    "build": "expo-module build"
+  },
+  "keywords": [
+    "react-native",
+    "expo",
+    "thermal-printer",
+    "escpos",
+    "bluetooth"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/yourusername/expo-thermal-printer.git"
+  },
+  "author": "Your Name",
+  "license": "MIT"
+}

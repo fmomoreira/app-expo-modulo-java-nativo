@@ -17,13 +17,16 @@ import {
   connectPrinter,
   disconnectPrinter,
   PrinterDevice,
-} from '../../modules/expo-thermal-printer';
+} from '../modules/expo-thermal-printer';
 
-export default function HomeScreen() {
+export default function PrinterTestScreen() {
   const [loading, setLoading] = useState(false);
   const [printers, setPrinters] = useState<PrinterDevice[]>([]);
   const [connectedPrinter, setConnectedPrinter] = useState<string | null>(null);
 
+  /**
+   * Solicita permissões Bluetooth necessárias
+   */
   const requestBluetoothPermissions = async (): Promise<boolean> => {
     if (Platform.OS !== 'android') {
       return true;
@@ -31,6 +34,7 @@ export default function HomeScreen() {
 
     try {
       if (Platform.Version >= 31) {
+        // Android 12+
         const granted = await PermissionsAndroid.requestMultiple([
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
@@ -42,6 +46,7 @@ export default function HomeScreen() {
           granted['android.permission.BLUETOOTH_CONNECT'] === PermissionsAndroid.RESULTS.GRANTED
         );
       } else {
+        // Android 7-11
         const granted = await PermissionsAndroid.request(
           PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION
         );
@@ -54,6 +59,9 @@ export default function HomeScreen() {
     }
   };
 
+  /**
+   * Busca impressoras Bluetooth pareadas
+   */
   const handleGetPrinters = async () => {
     setLoading(true);
     try {
@@ -78,6 +86,9 @@ export default function HomeScreen() {
     }
   };
 
+  /**
+   * Conecta a uma impressora específica
+   */
   const handleConnectPrinter = async (address: string, name: string) => {
     setLoading(true);
     try {
@@ -93,6 +104,9 @@ export default function HomeScreen() {
     }
   };
 
+  /**
+   * Desconecta da impressora atual
+   */
   const handleDisconnect = async () => {
     setLoading(true);
     try {
@@ -108,6 +122,9 @@ export default function HomeScreen() {
     }
   };
 
+  /**
+   * Imprime texto de teste
+   */
   const handlePrintText = async () => {
     setLoading(true);
     try {
@@ -117,19 +134,10 @@ export default function HomeScreen() {
         return;
       }
 
-      const result = await printText(
-        '================================\n' +
-        'TESTE DE IMPRESSAO\n' +
-        'Modulo Nativo React Native\n' +
-        '================================\n' +
-        'Algoritmo Floyd-Steinberg\n' +
-        'Biblioteca DantSu ESC/POS\n' +
-        '================================\n\n\n',
-        {
-          paperWidth: 58,
-          encoding: 'ISO-8859-1',
-        }
-      );
+      const result = await printText('Teste de Impressão\nMódulo Nativo React Native\n', {
+        paperWidth: 58,
+        encoding: 'ISO-8859-1',
+      });
 
       if (result.success) {
         Alert.alert('Sucesso', 'Texto impresso com sucesso!');
@@ -141,10 +149,18 @@ export default function HomeScreen() {
     }
   };
 
+  /**
+   * Gera uma imagem de teste simples em Base64
+   */
   const generateTestImage = (): string => {
+    // Imagem de teste 100x100 pixels em Base64 (quadrado preto)
+    // Em produção, use react-native-view-shot para capturar a tela
     return 'iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mNk+M9Qz0AEYBxVSF+FAP0QDiWl0HiCAAAAAElFTkSuQmCC';
   };
 
+  /**
+   * Imprime imagem de teste com dithering
+   */
   const handlePrintImage = async () => {
     setLoading(true);
     try {
@@ -175,7 +191,7 @@ export default function HomeScreen() {
   return (
     <ScrollView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.title}>🖨️ Impressão Térmica</Text>
+        <Text style={styles.title}>Teste de Impressão Térmica</Text>
         <Text style={styles.subtitle}>Módulo Nativo Java/Kotlin</Text>
       </View>
 
@@ -196,7 +212,7 @@ export default function HomeScreen() {
           disabled={loading}
         >
           <Text style={styles.buttonText}>
-            {loading ? 'Buscando...' : '🔍 Buscar Impressoras Bluetooth'}
+            {loading ? 'Buscando...' : 'Buscar Impressoras Bluetooth'}
           </Text>
         </TouchableOpacity>
 
@@ -223,7 +239,7 @@ export default function HomeScreen() {
             onPress={handleDisconnect}
             disabled={loading}
           >
-            <Text style={styles.buttonText}>🔌 Desconectar</Text>
+            <Text style={styles.buttonText}>Desconectar</Text>
           </TouchableOpacity>
         )}
       </View>
@@ -236,7 +252,7 @@ export default function HomeScreen() {
           onPress={handlePrintText}
           disabled={loading}
         >
-          <Text style={styles.buttonText}>📄 Imprimir Texto de Teste</Text>
+          <Text style={styles.buttonText}>Imprimir Texto de Teste</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -245,7 +261,7 @@ export default function HomeScreen() {
           disabled={loading}
         >
           <Text style={styles.buttonText}>
-            🖼️ Imprimir Imagem (com Dithering)
+            Imprimir Imagem (com Dithering)
           </Text>
         </TouchableOpacity>
       </View>
@@ -253,16 +269,12 @@ export default function HomeScreen() {
       {loading && (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator size="large" color="#007AFF" />
-          <Text style={styles.loadingText}>Processando...</Text>
         </View>
       )}
 
       <View style={styles.footer}>
         <Text style={styles.footerText}>
-          ✨ Algoritmo Floyd-Steinberg para qualidade profissional
-        </Text>
-        <Text style={styles.footerSubtext}>
-          Compatível com Moderninha e impressoras ESC/POS
+          Algoritmo Floyd-Steinberg para qualidade profissional
         </Text>
       </View>
     </ScrollView>
@@ -363,14 +375,9 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0,0,0,0.7)',
+    backgroundColor: 'rgba(0,0,0,0.3)',
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  loadingText: {
-    color: '#fff',
-    marginTop: 10,
-    fontSize: 16,
   },
   footer: {
     padding: 20,
@@ -380,11 +387,5 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#999',
     textAlign: 'center',
-  },
-  footerSubtext: {
-    fontSize: 10,
-    color: '#bbb',
-    textAlign: 'center',
-    marginTop: 5,
   },
 });

@@ -4,6 +4,7 @@ import android.graphics.Bitmap
 import android.graphics.Color
 import android.util.Log
 import com.dantsu.escposprinter.connection.DeviceConnection
+import com.dantsu.escposprinter.exceptions.EscPosConnectionException
 
 /**
  * Motor de Impressão de Imagem de Alta Fidelidade
@@ -86,9 +87,10 @@ object RawImagePrinter {
                 val pixel = bitmap.getPixel(x, y)
                 
                 // Determina se o pixel é preto
-                // Usa threshold de 128 no canal vermelho (imagem já está em P&B)
-                // Também considera pixels transparentes como pretos
-                val isBlack = Color.red(pixel) < 128 || Color.alpha(pixel) < 128
+                // Pixel é preto somente se for OPACO (alpha >= 128) E ESCURO (luminância < 128)
+                // Pixels transparentes são tratados como BRANCO (cor do papel)
+                val alpha = Color.alpha(pixel)
+                val isBlack = alpha >= 128 && Color.red(pixel) < 128
                 
                 if (isBlack) {
                     // Calcula a posição do bit dentro do byte
@@ -157,6 +159,11 @@ object RawImagePrinter {
                 connection.write(lineFeed)
                 Log.d(TAG, "Adicionado $feedLines linhas de espaçamento")
             }
+            
+            // 6. FLUSH: Envia TUDO que está no buffer para a impressora
+            // CRÍTICO: Sem isso, os dados ficam presos no buffer interno da DantSu
+            Log.d(TAG, "Flush: enviando buffer para impressora...")
+            connection.send()
             
             Log.d(TAG, "✅ Impressão raw concluída com sucesso!")
             

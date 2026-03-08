@@ -52,7 +52,8 @@ class ExpoThermalPrinterModule : Module() {
     }
     
     private var currentConnection: DeviceConnection? = null
-    private var currentPrinter: EscPosPrinter? = null
+    private var currentPrinter: EscPosPrinter? = null // DEPRECATED: Usar textPrinter
+    private var textPrinter: EscPosPrinter? = null // Dedicado para textos ESC/POS
     private var usbPermissionLatch: CountDownLatch? = null
     private var usbPermissionGranted = false
     
@@ -70,107 +71,80 @@ class ExpoThermalPrinterModule : Module() {
             var bitmap: Bitmap? = null
             val slices = mutableListOf<Bitmap>()
             try {
-                Log.d(TAG, "=== INICIANDO IMPRESSÃO DE IMAGEM ===")
+                Log.d(TAG, "=== ROTA 1: IMPRESSÃO DE IMAGEM (ARQUITETURA DESACOPLADA) ===")
                 
+                // 1. Garante conexão física
+                val conn = ensureConnection() ?: throw Exception("Falha ao abrir conexão com a impressora")
+                
+                // 2. Extrai opções
                 val paperWidth = (options["paperWidth"] as? Int) ?: 58
-                val dpi = (options["dpi"] as? Int) ?: DEFAULT_DPI
                 val applyDithering = (options["applyDithering"] as? Boolean) ?: true
                 val useThreshold = (options["useThreshold"] as? Boolean) ?: false
                 val enableSlicing = (options["enableSlicing"] as? Boolean) ?: true
                 val maxSliceHeight = (options["maxSliceHeight"] as? Int) ?: 400
                 
-                Log.d(TAG, "Configurações: paperWidth=$paperWidth mm, dpi=$dpi, dithering=$applyDithering, threshold=$useThreshold, slicing=$enableSlicing")
+                Log.d(TAG, "Configurações: paperWidth=$paperWidth mm, dithering=$applyDithering, threshold=$useThreshold, slicing=$enableSlicing")
                 
-                // Decodifica Base64 para Bitmap
-                Log.d(TAG, "Decodificando imagem Base64...")
+                // 3. Decodifica Base64 para Bitmap
+                Log.d(TAG, "Decodificando Base64...")
                 val decodedBytes = Base64.decode(base64Image, Base64.DEFAULT)
                 bitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+                    ?: throw Exception("Base64 inválida ou corrompida")
                 
-                if (bitmap == null) {
-                    Log.e(TAG, "Falha ao decodificar imagem Base64")
-                    promise.reject("DECODE_ERROR", "Falha ao decodificar imagem Base64", null)
-                    return@AsyncFunction
-                }
+                Log.d(TAG, "Bitmap original: ${bitmap.width}x${bitmap.height}px")
                 
-                Log.d(TAG, "Imagem decodificada: ${bitmap.width}x${bitmap.height} pixels")
-                
-                // Redimensiona para a largura da bobina
-                Log.d(TAG, "Redimensionando imagem para bobina de $paperWidth mm...")
+                // 4. DELEGA PARA CLASSES ESPECIALISTAS
+                // Redimensiona
                 bitmap = ImageUtils.resizeForPrinter(bitmap, paperWidth)
-                Log.d(TAG, "Imagem redimensionada: ${bitmap.width}x${bitmap.height} pixels")
+                Log.d(TAG, "Redimensionado: ${bitmap.width}x${bitmap.height}px")
                 
-                // Aplica processamento de imagem (threshold OU dithering)
+                // Aplica processamento (threshold OU dithering)
                 if (useThreshold) {
-                    Log.d(TAG, "Aplicando threshold (ideal para QR codes e textos)...")
+                    Log.d(TAG, "Aplicando threshold (QR codes)...")
                     bitmap = ImageUtils.applyThreshold(bitmap)
-                    Log.d(TAG, "Threshold aplicado com sucesso")
                 } else if (applyDithering) {
-                    Log.d(TAG, "Aplicando algoritmo Floyd-Steinberg (ideal para fotos)...")
+                    Log.d(TAG, "Aplicando Floyd-Steinberg (fotos)...")
                     bitmap = ImageUtils.applyFloydSteinbergDithering(bitmap)
-                    Log.d(TAG, "Dithering aplicado com sucesso")
                 }
                 
-                // Verifica se precisa fatiar a imagem (anti buffer overflow)
+                // 5. Imprime usando motor RAW (com ou sem slicing)
                 if (enableSlicing && bitmap.height > maxSliceHeight) {
-                    Log.d(TAG, "⚠ Imagem grande detectada (${bitmap.height}px). Fatiando em pedaços de ${maxSliceHeight}px...")
+                    Log.d(TAG, "⚠ Imagem grande (${bitmap.height}px). Fatiando em ${maxSliceHeight}px...")
                     slices.addAll(ImageUtils.sliceImage(bitmap, maxSliceHeight))
-                    bitmap = null // Já foi reciclado pelo sliceImage
-                    Log.d(TAG, "✓ Imagem fatiada em ${slices.size} partes")
+                    bitmap = null // Já reciclado
                     
-                    // Imprime cada fatia usando RAW BYTES (Padrão RawBT)
-                    printWithRetry(paperWidth, dpi) { printer ->
-                        Log.d(TAG, "🚀 Usando motor RAW de alta fidelidade (padrão RawBT)")
-                        
-                        if (currentConnection == null) {
-                            throw Exception("Conexão com impressora não disponível")
-                        }
-                        
-                        RawImagePrinter.printBitmapSlices(
-                            connection = currentConnection!!,
-                            slices = slices,
-                            centered = true,
-                            feedLinesBetweenSlices = 0,
-                            feedLinesAfterLast = 3
-                        )
-                        
-                        Log.d(TAG, "✓ Todas as fatias impressas com sucesso!")
-                    }
+                    Log.d(TAG, "🚀 Imprimindo ${slices.size} fatias via RawImagePrinter")
+                    RawImagePrinter.printBitmapSlices(
+                        connection = conn,
+                        slices = slices,
+                        centered = true,
+                        feedLinesBetweenSlices = 0,
+                        feedLinesAfterLast = 3
+                    )
                 } else {
-                    // Imagem pequena - imprime de uma vez
-                    val finalBitmap = bitmap!!
-                    Log.d(TAG, "Imagem pequena (${finalBitmap.height}px). Imprimindo de uma vez...")
+                    Log.d(TAG, "🚀 Imprimindo imagem única via RawImagePrinter")
+                    Log.d(TAG, "Tamanho estimado: ${RawImagePrinter.estimateRawBytesSize(bitmap)} bytes")
                     
-                    printWithRetry(paperWidth, dpi) { printer ->
-                        Log.d(TAG, "🚀 Usando motor RAW de alta fidelidade (padrão RawBT)")
-                        Log.d(TAG, "Tamanho estimado: ${RawImagePrinter.estimateRawBytesSize(finalBitmap)} bytes")
-                        
-                        if (currentConnection == null) {
-                            throw Exception("Conexão com impressora não disponível")
-                        }
-                        
-                        RawImagePrinter.printBitmapDirectly(
-                            connection = currentConnection!!,
-                            bitmap = finalBitmap,
-                            centered = true,
-                            feedLines = 3
-                        )
-                        
-                        Log.d(TAG, "✓ Impressão concluída com sucesso!")
-                    }
+                    RawImagePrinter.printBitmapDirectly(
+                        connection = conn,
+                        bitmap = bitmap,
+                        centered = true,
+                        feedLines = 3
+                    )
                 }
                 
                 promise.resolve(
                     mapOf(
                         "success" to true,
-                        "message" to "Imagem impressa com sucesso"
+                        "message" to "Imagem impressa via RawBytes"
                     )
                 )
                 
             } catch (e: Exception) {
-                Log.e(TAG, "✗ Erro durante impressão: ${e.message}", e)
-                promise.reject("PRINT_ERROR", e.message ?: "Erro desconhecido durante impressão", e)
+                Log.e(TAG, "❌ Erro na Rota de Imagem: ${e.message}", e)
+                promise.reject("IMAGE_ERROR", e.message ?: "Erro ao imprimir imagem", e)
             } finally {
-                // Libera memória SEMPRE (crítico para maquininhas com pouca RAM)
+                // Libera memória
                 bitmap?.recycle()
                 slices.forEach { it.recycle() }
                 slices.clear()
@@ -179,31 +153,39 @@ class ExpoThermalPrinterModule : Module() {
         }
         
         /**
-         * Imprime texto simples
+         * ROTA 2: Impressão de Textos ESC/POS
+         * Usa DantSu apenas para formatação de texto ([L], [C], <b>, etc)
          * 
-         * @param text Texto a ser impresso
+         * @param text Template de texto ESC/POS
          * @param options Opções de impressão
          * @param promise Promise para retornar resultado
          */
         AsyncFunction("printText") { text: String, options: Map<String, Any>, promise: Promise ->
             try {
-                Log.d(TAG, "Imprimindo texto: $text")
+                Log.d(TAG, "=== ROTA 2: IMPRESSÃO DE TEXTO (DANTSU) ===")
                 
+                // 1. Garante conexão física
+                val conn = ensureConnection() ?: throw Exception("Falha ao abrir conexão com a impressora")
+                
+                // 2. Extrai opções
                 val paperWidth = (options["paperWidth"] as? Int) ?: 58
-                val encoding = (options["encoding"] as? String) ?: "ISO-8859-1"
                 val dpi = (options["dpi"] as? Int) ?: DEFAULT_DPI
                 
-                val charset = when(encoding.uppercase()) {
-                    "UTF-8" -> Charsets.UTF_8
-                    "CP850" -> Charset.forName("CP850")
-                    else -> Charsets.ISO_8859_1
+                // 3. Cria/reutiliza textPrinter dedicado
+                // Lembrete: 32 caracteres para 58mm, 48 caracteres para 80mm
+                val charsPerLine = if (paperWidth == 58) 32 else 48
+                
+                if (textPrinter == null) {
+                    Log.d(TAG, "Criando textPrinter dedicado ($charsPerLine chars/linha)")
+                    textPrinter = EscPosPrinter(conn, dpi, DEFAULT_WIDTH_MM, charsPerLine)
                 }
                 
-                // Usa printWithRetry para auto-recover de Doze Mode
-                printWithRetry(paperWidth, dpi) { printer ->
-                    printer.printFormattedText(text)
-                    Log.d(TAG, "Texto impresso com sucesso")
-                }
+                // 4. Imprime texto formatado (tags ESC/POS funcionam aqui)
+                Log.d(TAG, "Imprimindo texto via DantSu...")
+                textPrinter?.printFormattedText(text)
+                
+                // 5. Força flush do buffer
+                conn.send()
                 
                 promise.resolve(
                     mapOf(
@@ -213,8 +195,8 @@ class ExpoThermalPrinterModule : Module() {
                 )
                 
             } catch (e: Exception) {
-                Log.e(TAG, "Erro ao imprimir texto: ${e.message}", e)
-                promise.reject("PRINT_ERROR", e.message ?: "Erro ao imprimir texto", e)
+                Log.e(TAG, "❌ Erro na Rota de Texto: ${e.message}", e)
+                promise.reject("TEXT_ERROR", e.message ?: "Erro ao imprimir texto", e)
             }
         }
         
@@ -590,87 +572,68 @@ class ExpoThermalPrinterModule : Module() {
          * @param promise Promise para retornar resultado
          */
         AsyncFunction("printTestImage") { paperWidth: Int, dpi: Int, applyDithering: Boolean, promise: Promise ->
+            var bitmap: Bitmap? = null
             try {
-                Log.d(TAG, "=== TESTE DE IMPRESSÃO COM IMAGEM HARDCODED ===")
-                Log.d(TAG, "Usando imagem Base64 interna do Kotlin")
-                Log.d(TAG, "Tamanho do Base64: ${TEST_IMAGE_BASE64.length}")
+                Log.d(TAG, "=== TESTE: IMAGEM HARDCODED (ARQUITETURA DESACOPLADA) ===")
                 
-                val printer = getOrCreatePrinter(paperWidth, dpi)
+                // 1. Garante conexão
+                val conn = ensureConnection() ?: throw Exception("Falha ao conectar impressora")
                 
-                if (printer == null) {
-                    promise.reject("NO_PRINTER", "Nenhuma impressora disponível", null)
-                    return@AsyncFunction
-                }
-                
-                Log.d(TAG, "Decodificando Base64 interno...")
+                // 2. Decodifica imagem hardcoded
+                Log.d(TAG, "Decodificando Base64 interno (${TEST_IMAGE_BASE64.length} chars)...")
                 val decodedBytes = Base64.decode(TEST_IMAGE_BASE64, Base64.DEFAULT)
-                Log.d(TAG, "Bytes decodificados: ${decodedBytes.size}")
+                bitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+                    ?: throw Exception("Falha ao decodificar Base64 interno")
                 
-                val originalBitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+                Log.d(TAG, "Bitmap: ${bitmap.width}x${bitmap.height}px")
                 
-                if (originalBitmap == null) {
-                    promise.reject("DECODE_ERROR", "Falha ao decodificar imagem Base64 interna", null)
-                    return@AsyncFunction
+                // 3. Processa imagem
+                bitmap = ImageUtils.resizeForPrinter(bitmap, paperWidth)
+                if (applyDithering) {
+                    Log.d(TAG, "Aplicando Floyd-Steinberg...")
+                    bitmap = ImageUtils.applyFloydSteinbergDithering(bitmap)
                 }
                 
-                Log.d(TAG, "Bitmap decodificado: ${originalBitmap.width}x${originalBitmap.height}")
-                
-                val processedBitmap = if (applyDithering) {
-                    Log.d(TAG, "Aplicando dithering Floyd-Steinberg...")
-                    val resized = ImageUtils.resizeForPrinter(originalBitmap, paperWidth)
-                    val dithered = ImageUtils.applyFloydSteinbergDithering(resized)
-                    resized.recycle()
-                    dithered
-                } else {
-                    ImageUtils.resizeForPrinter(originalBitmap, paperWidth)
+                // 4. Imprime cabeçalho via textPrinter
+                val charsPerLine = if (paperWidth == 58) 32 else 48
+                if (textPrinter == null) {
+                    textPrinter = EscPosPrinter(conn, dpi, DEFAULT_WIDTH_MM, charsPerLine)
                 }
                 
-                originalBitmap.recycle()
-                
-                Log.d(TAG, "🚀 Usando motor RAW de alta fidelidade (padrão RawBT)")
-                Log.d(TAG, "Tamanho estimado: ${RawImagePrinter.estimateRawBytesSize(processedBitmap)} bytes")
-                
-                if (currentConnection == null) {
-                    promise.reject("NO_CONNECTION", "Conexão com impressora não disponível", null)
-                    return@AsyncFunction
-                }
-                
-                // Imprime cabeçalho
-                printer.printFormattedText(
-                    "[C]<b>TESTE DE IMAGEM HARDCODED</b>\n" +
-                    "[C]Imagem Base64 interna do Kotlin\n" +
-                    "[C]Motor RAW (Padrão RawBT)\n\n"
+                textPrinter?.printFormattedText(
+                    "[C]<b>TESTE HARDCODED</b>\n" +
+                    "[C]Motor RAW (RawBT)\n\n"
                 )
+                conn.send() // Flush texto
                 
-                // Imprime imagem usando RAW BYTES
-                Log.d(TAG, "Imprimindo imagem de teste com RAW bytes...")
+                // 5. Imprime imagem via RawImagePrinter
+                Log.d(TAG, "🚀 Imprimindo via RawImagePrinter (${RawImagePrinter.estimateRawBytesSize(bitmap)} bytes)")
                 RawImagePrinter.printBitmapDirectly(
-                    connection = currentConnection!!,
-                    bitmap = processedBitmap,
+                    connection = conn,
+                    bitmap = bitmap,
                     centered = true,
                     feedLines = 2
                 )
                 
-                // Imprime rodapé
-                printer.printFormattedText(
-                    "[C]Se isso imprimiu, o Kotlin está OK!\n" +
-                    "[C]O problema está na comunicação RN→Kotlin\n\n\n"
+                // 6. Imprime rodapé
+                textPrinter?.printFormattedText(
+                    "[C]Se imprimiu: Kotlin OK!\n" +
+                    "[C]Problema: RN→Kotlin\n\n\n"
                 )
-                
-                processedBitmap.recycle()
-                
-                Log.d(TAG, "✅ Imagem de teste impressa com sucesso!")
+                conn.send() // Flush texto
                 
                 promise.resolve(
                     mapOf(
                         "success" to true,
-                        "message" to "Imagem de teste hardcoded impressa com sucesso!"
+                        "message" to "Teste hardcoded via arquitetura desacoplada!"
                     )
                 )
                 
             } catch (e: Exception) {
-                Log.e(TAG, "❌ Erro ao imprimir imagem de teste: ${e.message}", e)
-                promise.reject("PRINT_TEST_ERROR", e.message ?: "Erro ao imprimir imagem de teste", e)
+                Log.e(TAG, "❌ Erro no teste: ${e.message}", e)
+                promise.reject("TEST_ERROR", e.message ?: "Erro no teste", e)
+            } finally {
+                bitmap?.recycle()
             }
         }
         
@@ -960,60 +923,75 @@ class ExpoThermalPrinterModule : Module() {
     }
     
     /**
-     * Executa impressão com retry automático para recuperar de Doze Mode
-     * Android 7 fecha sockets Bluetooth inativos, causando Broken Pipe
+     * ARQUITETURA DESACOPLADA: Gerenciador de Ciclo de Vida da Conexão
      * 
-     * @param paperWidth Largura do papel (58 ou 80mm)
-     * @param dpi DPI da impressora
-     * @param printAction Ação de impressão a executar
+     * Retorna a conexão viva ou tenta auto-conectar.
+     * Substitui printWithRetry() com abordagem mais limpa.
+     * 
+     * @return DeviceConnection ativa ou null se falhar
      */
-    private fun printWithRetry(paperWidth: Int, dpi: Int, printAction: (EscPosPrinter) -> Unit) {
-        var attempts = 0
-        var lastException: Exception? = null
-        
-        while (attempts < MAX_RETRY_ATTEMPTS) {
-            try {
-                val printer = getOrCreatePrinter(paperWidth, dpi)
-                
-                if (printer == null) {
-                    throw Exception("Nenhuma impressora conectada")
-                }
-                
-                printAction(printer)
-                return // Sucesso!
-                
-            } catch (e: IOException) {
-                lastException = e
-                val isBrokenPipe = e.message?.contains("Broken pipe", ignoreCase = true) == true ||
-                                   e.message?.contains("Socket closed", ignoreCase = true) == true
-                
-                if (isBrokenPipe && attempts < MAX_RETRY_ATTEMPTS - 1) {
-                    Log.w(TAG, "Socket fechado pelo Doze Mode. Reconectando... (tentativa ${attempts + 1}/$MAX_RETRY_ATTEMPTS)")
-                    
-                    // Força reconexão
+    private fun ensureConnection(): DeviceConnection? {
+        try {
+            // 1. Se já temos conexão ativa, reutiliza
+            if (currentConnection?.isConnected == true) {
+                Log.d(TAG, "✓ Reutilizando conexão existente")
+                return currentConnection
+            }
+            
+            // 2. Conexão caíu ou não existe - tenta reconectar
+            if (currentConnection != null) {
+                Log.w(TAG, "⚠ Conexão detectada como inativa. Tentando reconectar...")
+                try {
+                    currentConnection!!.connect()
+                    Log.d(TAG, "✓ Reconexão bem-sucedida!")
+                    return currentConnection
+                } catch (e: Exception) {
+                    Log.e(TAG, "✗ Falha ao reconectar: ${e.message}")
+                    // Limpa conexão quebrada
                     try {
                         currentConnection?.disconnect()
-                    } catch (disconnectError: Exception) {
-                        Log.w(TAG, "Erro ao desconectar: ${disconnectError.message}")
-                    }
-                    
+                    } catch (ignored: Exception) {}
                     currentConnection = null
                     currentPrinter = null
-                    
-                    // Aguarda 500ms antes de reconectar
-                    Thread.sleep(500)
-                    
-                    attempts++
-                } else {
-                    throw e // Erro não recuperável ou tentativas esgotadas
+                    textPrinter = null
                 }
-            } catch (e: Exception) {
-                lastException = e
-                throw e // Outros erros não são recuperáveis
             }
+            
+            // 3. Nenhuma conexão - busca e conecta automaticamente
+            Log.d(TAG, "Buscando impressora disponível...")
+            val connection = findAnyAvailablePrinter()
+            
+            if (connection == null) {
+                Log.e(TAG, "✗ Nenhuma impressora encontrada")
+                return null
+            }
+            
+            // 4. Conecta com retry
+            var attempts = 0
+            while (attempts < MAX_RETRY_ATTEMPTS) {
+                try {
+                    attempts++
+                    Log.d(TAG, "Tentativa $attempts/$MAX_RETRY_ATTEMPTS de conectar...")
+                    connection.connect()
+                    Log.d(TAG, "✓ Conectado com sucesso!")
+                    
+                    currentConnection = connection
+                    return connection
+                    
+                } catch (e: Exception) {
+                    Log.e(TAG, "✗ Tentativa $attempts falhou: ${e.message}")
+                    if (attempts < MAX_RETRY_ATTEMPTS) {
+                        Thread.sleep(500)
+                    }
+                }
+            }
+            
+            Log.e(TAG, "✗ Falha após $MAX_RETRY_ATTEMPTS tentativas")
+            return null
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "✗ Erro crítico em ensureConnection: ${e.message}", e)
+            return null
         }
-        
-        // Se chegou aqui, esgotou tentativas
-        throw lastException ?: Exception("Falha após $MAX_RETRY_ATTEMPTS tentativas")
     }
 }

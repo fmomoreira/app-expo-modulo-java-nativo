@@ -45,6 +45,10 @@ class ExpoThermalPrinterModule : Module() {
         private const val DEFAULT_WIDTH_MM = 48f
         private const val ACTION_USB_PERMISSION = "expo.modules.thermalprinter.USB_PERMISSION"
         private const val MAX_RETRY_ATTEMPTS = 2
+        
+        // Imagem Base64 de teste (1x1 pixel preto PNG)
+        // Usado para testar se o problema está na comunicação RN→Kotlin ou no processamento Kotlin
+        private const val TEST_IMAGE_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=="
     }
     
     private var currentConnection: DeviceConnection? = null
@@ -517,6 +521,82 @@ class ExpoThermalPrinterModule : Module() {
             } catch (e: Exception) {
                 Log.e(TAG, "Erro no auto-teste: ${e.message}", e)
                 promise.reject("TEST_ERROR", e.message ?: "Erro no auto-teste", e)
+            }
+        }
+        
+        /**
+         * Imprime uma imagem de teste hardcoded no Kotlin (sem receber do React Native)
+         * Usado para isolar se o problema está na comunicação RN→Kotlin ou no processamento
+         * 
+         * @param paperWidth Largura do papel (58 ou 80mm)
+         * @param dpi DPI da impressora (padrão 203)
+         * @param applyDithering Se deve aplicar dithering Floyd-Steinberg
+         * @param promise Promise para retornar resultado
+         */
+        AsyncFunction("printTestImage") { paperWidth: Int, dpi: Int, applyDithering: Boolean, promise: Promise ->
+            try {
+                Log.d(TAG, "=== TESTE DE IMPRESSÃO COM IMAGEM HARDCODED ===")
+                Log.d(TAG, "Usando imagem Base64 interna do Kotlin")
+                Log.d(TAG, "Tamanho do Base64: ${TEST_IMAGE_BASE64.length}")
+                
+                val printer = getOrCreatePrinter(paperWidth, dpi)
+                
+                if (printer == null) {
+                    promise.reject("NO_PRINTER", "Nenhuma impressora disponível", null)
+                    return@AsyncFunction
+                }
+                
+                Log.d(TAG, "Decodificando Base64 interno...")
+                val decodedBytes = Base64.decode(TEST_IMAGE_BASE64, Base64.DEFAULT)
+                Log.d(TAG, "Bytes decodificados: ${decodedBytes.size}")
+                
+                val originalBitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size)
+                
+                if (originalBitmap == null) {
+                    promise.reject("DECODE_ERROR", "Falha ao decodificar imagem Base64 interna", null)
+                    return@AsyncFunction
+                }
+                
+                Log.d(TAG, "Bitmap decodificado: ${originalBitmap.width}x${originalBitmap.height}")
+                
+                val processedBitmap = if (applyDithering) {
+                    Log.d(TAG, "Aplicando dithering Floyd-Steinberg...")
+                    val resized = ImageUtils.resizeForPrinter(originalBitmap, paperWidth, dpi)
+                    val dithered = ImageUtils.applyFloydSteinbergDithering(resized)
+                    resized.recycle()
+                    dithered
+                } else {
+                    ImageUtils.resizeForPrinter(originalBitmap, paperWidth, dpi)
+                }
+                
+                originalBitmap.recycle()
+                
+                Log.d(TAG, "Convertendo para comandos ESC/POS...")
+                val imageHex = PrinterTextParserImg.bitmapToHexadecimalString(printer, processedBitmap)
+                
+                Log.d(TAG, "Imprimindo imagem de teste...")
+                printer.printFormattedText(
+                    "[C]<b>TESTE DE IMAGEM HARDCODED</b>\n" +
+                    "[C]Imagem Base64 interna do Kotlin\n" +
+                    "[C]<img>$imageHex</img>\n" +
+                    "[C]Se isso imprimiu, o Kotlin está OK!\n" +
+                    "[C]O problema está na comunicação RN→Kotlin\n\n\n"
+                )
+                
+                processedBitmap.recycle()
+                
+                Log.d(TAG, "✅ Imagem de teste impressa com sucesso!")
+                
+                promise.resolve(
+                    mapOf(
+                        "success" to true,
+                        "message" to "Imagem de teste hardcoded impressa com sucesso!"
+                    )
+                )
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "❌ Erro ao imprimir imagem de teste: ${e.message}", e)
+                promise.reject("PRINT_TEST_ERROR", e.message ?: "Erro ao imprimir imagem de teste", e)
             }
         }
         

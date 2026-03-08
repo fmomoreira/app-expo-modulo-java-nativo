@@ -49,13 +49,19 @@ export function usePrintReceipt(options: UsePrintReceiptOptions = {}) {
       await new Promise(resolve => setTimeout(resolve, 100));
       
       // Captura o componente como Base64
-      const base64Image = await captureRef(receiptRef, {
-        format: 'jpg',
-        quality: 1,
-        result: 'base64',
-      });
+      let base64Image: string;
+      try {
+        base64Image = await captureRef(receiptRef, {
+          format: 'jpg',
+          quality: 1,
+          result: 'base64',
+        });
+        console.log('[usePrintReceipt] ✅ Template capturado! Tamanho:', base64Image.length);
+      } catch (captureError: any) {
+        console.error('[usePrintReceipt] ❌ ERRO NA CAPTURA:', captureError);
+        throw new Error(`Falha ao capturar template: ${captureError.message || 'unknown error'}`);
+      }
 
-      console.log('[usePrintReceipt] Template capturado! Tamanho:', base64Image.length);
       console.log('[usePrintReceipt] Enviando para impressora...');
 
       // Envia para o módulo nativo imprimir

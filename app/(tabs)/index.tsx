@@ -17,6 +17,8 @@ import {
   connectPrinter,
   disconnectPrinter,
   selfTest,
+  printReceipt as printReceiptNative,
+  printTestImage,
   PrinterDevice,
 } from '../../modules/expo-thermal-printer';
 import { ReceiptTemplate, ReceiptItem } from '../../components/ReceiptTemplate';
@@ -191,37 +193,44 @@ export default function HomeScreen() {
     }
   };
 
-  const generateTestImage = (): string => {
-    return 'iVBORw0KGgoAAAANSUhEUgAAAAoAAAAKCAYAAACNMs+9AAAAFUlEQVR42mNk+M9Qz0AEYBxVSF+FAP0QDiWl0HiCAAAAAElFTkSuQmCC';
-  };
-
   const handlePrintImage = async () => {
-    setLoading(true);
+    const logMessages: string[] = [];
     try {
-      const hasPermission = await requestBluetoothPermissions();
-      if (!hasPermission) {
-        Alert.alert('Erro', 'Permissões Bluetooth não concedidas');
-        return;
-      }
-
-      const testImage = generateTestImage();
+      setLoading(true);
+      logMessages.push('=== TESTE COM IMAGEM HARDCODED DO KOTLIN ===');
+      logMessages.push('Chamando printTestImage() - imagem Base64 já está no Kotlin');
+      logMessages.push('Não estamos enviando NADA do React Native');
       
-      const result = await printImage(testImage, {
+      const result = await printTestImage({
         paperWidth: 58,
         dpi: 203,
         applyDithering: true,
       });
-
+      
+      logMessages.push(`Resultado: ${JSON.stringify(result, null, 2)}`);
+      
       if (result.success) {
-        Alert.alert('Sucesso', 'Imagem impressa com sucesso!');
+        console.log(logMessages.join('\n'));
+        Alert.alert('✅ Sucesso', 'Imagem hardcoded do Kotlin impressa!\n\nSe funcionou: problema está na comunicação RN→Kotlin\nSe falhou: problema está no processamento Kotlin');
+      } else {
+        logMessages.push(`❌ FALHA: ${result.message}`);
+        console.error(logMessages.join('\n'));
+        showLogsModal('❌ Erro ao Imprimir Imagem Hardcoded', logMessages);
       }
     } catch (error: any) {
-      Alert.alert('Erro', error.message || 'Erro ao imprimir imagem');
+      logMessages.push('❌ ERRO CAPTURADO:');
+      logMessages.push(`Tipo: ${error.name || 'Error'}`);
+      logMessages.push(`Mensagem: ${error.message || String(error)}`);
+      if (error.stack) {
+        logMessages.push(`Stack: ${error.stack}`);
+      }
+      
+      console.error(logMessages.join('\n'));
+      showLogsModal('❌ Erro ao Imprimir Imagem Hardcoded', logMessages);
     } finally {
       setLoading(false);
     }
   };
-
   const handleSelfTest = async () => {
     setLoading(true);
     try {
@@ -316,6 +325,53 @@ export default function HomeScreen() {
       
       console.error(logMessages.join('\n'));
       showLogsModal('❌ Erro ao Imprimir Cupom', logMessages);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePrintTextReceipt = async () => {
+    const logMessages: string[] = [];
+    try {
+      setLoading(true);
+      logMessages.push('=== IMPRESSÃO DE CUPOM (TEXTO PURO) ===');
+      
+      const hasPermission = await requestBluetoothPermissions();
+      if (!hasPermission) {
+        Alert.alert('Erro', 'Permissões Bluetooth não concedidas');
+        setLoading(false);
+        return;
+      }
+
+      logMessages.push('1. Preparando dados do cupom...');
+      
+      // Usa a função printReceipt do módulo nativo (apenas texto ESC/POS)
+      const result = await printReceiptNative(sampleReceiptData, {
+        cpf: '123.456.789-00',
+        total: sampleTotal,
+        qrCodeUrl: 'https://reinodasorte.com.br',
+      });
+
+      logMessages.push(`2. Resultado: ${JSON.stringify(result, null, 2)}`);
+      
+      if (result.success) {
+        console.log(logMessages.join('\n'));
+        Alert.alert('✅ Sucesso', 'Cupom fiscal (texto) impresso com sucesso!');
+      } else {
+        logMessages.push(`❌ FALHA: ${result.message}`);
+        console.error(logMessages.join('\n'));
+        showLogsModal('❌ Erro ao Imprimir Cupom Texto', logMessages);
+      }
+    } catch (error: any) {
+      logMessages.push('❌ ERRO CAPTURADO:');
+      logMessages.push(`Tipo: ${error.name || 'Error'}`);
+      logMessages.push(`Mensagem: ${error.message || String(error)}`);
+      if (error.stack) {
+        logMessages.push(`Stack: ${error.stack}`);
+      }
+      
+      console.error(logMessages.join('\n'));
+      showLogsModal('❌ Erro ao Imprimir Cupom Texto', logMessages);
     } finally {
       setLoading(false);
     }
@@ -416,18 +472,28 @@ export default function HomeScreen() {
       </View>
 
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>3. Cupom Fiscal (Template React Native)</Text>
+        <Text style={styles.sectionTitle}>3. Cupom Fiscal</Text>
         <Text style={styles.listTitle}>
-          Imprime um layout customizado criado em React Native
+          Duas formas de imprimir cupom fiscal
         </Text>
         
+        <TouchableOpacity
+          style={[styles.button, { backgroundColor: '#34C759' }]}
+          onPress={handlePrintTextReceipt}
+          disabled={loading}
+        >
+          <Text style={styles.buttonText}>
+            📄 Cupom Fiscal (Texto ESC/POS)
+          </Text>
+        </TouchableOpacity>
+
         <TouchableOpacity
           style={[styles.button, { backgroundColor: '#FF9500' }]}
           onPress={handlePrintTemplate}
           disabled={loading || isPrinting}
         >
           <Text style={styles.buttonText}>
-            🧾 Imprimir Cupom Fiscal (Template)
+            🧾 Cupom Fiscal (Template React Native)
           </Text>
         </TouchableOpacity>
       </View>

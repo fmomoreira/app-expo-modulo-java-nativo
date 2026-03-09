@@ -1,153 +1,179 @@
 O Gemini disse
-É completamente compreensível o cansaço. Refatorar várias vezes faz parte da rotina de quem está construindo um "motor" do zero, especialmente lidando com hardware, onde cada impressora tem sua própria mania. Mas acredite: você chegou na fase de polimento de uma arquitetura sênior.
+O seu AndroidManifest.xml está no caminho certo, mas existem alguns detalhes cruciais para que ele funcione perfeitamente tanto na declaração quanto na execução (solicitação dinâmica) entre as versões do Android.
 
-Vamos organizar a casa. Você levantou dois pontos cruciais aqui: a Dúvida Arquitetural (Screenshot vs Imagem) e o Desacoplamento do Código.
+Aqui está uma análise do que está bom e o que precisa ser ajustado:
 
-1. O Grande Debate: Tirar Print (ViewShot) vs Converter Imagem Direto
-Você perguntou: "Não era mais interessante enviar a imagem base64 direto em vez de tirar print da tela?"
+1. Localização e Bluetooth (O divisor de águas: Android 12)
+A sua lógica de separar por API está correta, mas para encontrar impressoras via Bluetooth no Android 12+ (API 31), você precisa garantir que o sistema entenda que você não quer rastrear a localização do usuário, apenas achar o hardware.
 
-A resposta é: Depende do que você está imprimindo. O seu módulo Kotlin não liga de onde vem a Base64. Ele só recebe e imprime. A decisão acontece lá no React Native:
+O ajuste no Manifest:
+No Android 12+, a permissão BLUETOOTH_ADVERTISE também costuma ser necessária se a impressora precisar "ver" o seu celular para emparelhar.
 
-Quando usar Imagem Direta (File to Base64): Se você quer imprimir a Logo do Solo, a Logo da Prefeitura ou um QR Code estático. Você pega o arquivo .png, converte pra Base64 e manda pro Kotlin. É perfeito.
+XML
+<uses-permission android:name="android.permission.BLUETOOTH_SCAN" 
+                 android:usesPermissionFlags="neverForLocation" />
+<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+<uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
+Atenção: Ao usar neverForLocation, você está prometendo ao Google que seu app não usará dados de Bluetooth para derivar a localização física. Se o seu app precisar da localização por outros motivos, você deve remover esse flag e pedir a permissão de localização normalmente.
 
-Quando usar Screenshot (ViewShot): Para o Recibo em si (A lista de produtos, preços variáveis, nome do cliente). Desenhar textos, tabelas e alinhar colunas matematicamente em uma imagem dinâmica no Android/Kotlin é um inferno. É muito mais fácil usar o React Native para desenhar a nota com Flexbox e tirar um print invisível disso.
+2. Permissões de Armazenamento (Android 10, 11 e 13+)
+Você incluiu READ_EXTERNAL_STORAGE e WRITE_EXTERNAL_STORAGE.
 
-A grande jogada de desacoplar é exatamente essa: ter uma porta de entrada para textos e outra para imagens.
+Android 10 e 11: O Google introduziu o "Scoped Storage". Você pode precisar adicionar android:requestLegacyExternalStorage="true" na tag <application> se estiver lidando com arquivos de forma antiga.
 
-2. A Arquitetura Desacoplada (O Fim das Refatorações)
-Com a sua classe RawImagePrinter brilhante que criamos, o seu ExpoThermalPrinterModule.kt não precisa mais saber como processar imagens. Ele vira apenas um Roteador (ou um Controller, como no PHP que você domina).
+Android 13+ (API 33): Essas permissões de armazenamento genéricas pararam de funcionar para mídia. Se você for imprimir fotos ou PDFs salvos, precisará de READ_MEDIA_IMAGES ou READ_MEDIA_VISUAL_USER_SELECTED.
 
-Sua arquitetura agora tem 3 pilares independentes:
+3. O Manifest Corrigido e Otimizado
+Aqui está a versão ajustada para garantir a compatibilidade com impressoras térmicas/Bluetooth:
 
-ConnectionManager (ou dentro do Module): Só abre e fecha a porta Bluetooth/USB.
+XML
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
-TextPrinter: Usa a biblioteca DantSu apenas para textos e comandos [L], [C].
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30" />
 
-RawImagePrinter: Pega a Base64, transforma em pontinhos pretos (Dithering) e envia os bytes crus (GS v 0).
+    <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" android:maxSdkVersion="30" />
 
-Aqui está como o seu ExpoThermalPrinterModule.kt deve ficar para abraçar esse desacoplamento de forma limpa e definitiva:
+    <uses-permission android:name="android.permission.BLUETOOTH_SCAN" 
+                     android:usesPermissionFlags="neverForLocation" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+    <uses-permission android:name="android.permission.BLUETOOTH_ADVERTISE" />
 
-Kotlin
-package expo.modules.thermalprinter
-
-import android.graphics.BitmapFactory
-import android.util.Base64
-import android.util.Log
-import com.dantsu.escposprinter.EscPosPrinter
-import com.dantsu.escposprinter.connection.DeviceConnection
-import expo.modules.kotlin.Promise
-import expo.modules.kotlin.modules.Module
-import expo.modules.kotlin.modules.ModuleDefinition
-
-class ExpoThermalPrinterModule : Module() {
+    <uses-permission android:name="android.permission.INTERNET" />
     
-    companion object {
-        private const val TAG = "ThermalPrinterModule"
-        private const val DEFAULT_DPI = 203
-        private const val DEFAULT_WIDTH_MM = 48f
-    }
-    
-    private var currentConnection: DeviceConnection? = null
-    // Nota: O EscPosPrinter da DantSu agora será usado APENAS para textos.
-    private var textPrinter: EscPosPrinter? = null 
+    <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="32" />
+    <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29" />
 
-    override fun definition() = ModuleDefinition {
-        Name("ExpoThermalPrinter")
+    <application 
+        ...
+        android:requestLegacyExternalStorage="true">
+        ...
+    </application>
+</manifest>
+4. A Parte Dinâmica (Código)
+O Manifest apenas declara que o app pode usar as permissões. A parte "dinâmica" acontece no seu código (Java/Kotlin ou React Native/Expo).
 
-        // ==========================================
-        // ROTA 1: IMPRESSÃO DE IMAGENS (LOGOS OU VIEWSHOT)
-        // ==========================================
-        AsyncFunction("printImage") { base64Image: String, options: Map<String, Any>, promise: Promise ->
-            try {
-                // 1. Garante que a conexão física está aberta
-                val conn = ensureConnection() ?: throw Exception("Falha ao abrir conexão com a impressora")
-                
-                // 2. Extrai opções
-                val paperWidth = (options["paperWidth"] as? Int) ?: 58
-                val applyDithering = (options["applyDithering"] as? Boolean) ?: true
-                
-                // 3. Transforma Base64 em Bitmap Android
-                val decodedBytes = Base64.decode(base64Image, Base64.DEFAULT)
-                var bitmap = BitmapFactory.decodeByteArray(decodedBytes, 0, decodedBytes.size) 
-                    ?: throw Exception("Base64 inválida ou corrompida")
+Para que o comportamento seja o que você descreveu, seu código deve fazer isto:
 
-                // 4. DELEGA A RESPONSABILIDADE PARA AS CLASSES ESPECIALISTAS
-                // Prepara a imagem (Redimensiona e aplica Floyd-Steinberg)
-                bitmap = ImageUtils.resizeForPrinter(bitmap, paperWidth)
-                if (applyDithering) {
-                    bitmap = ImageUtils.applyFloydSteinbergDithering(bitmap)
-                }
+Se SDK_INT < 31 (Android 7 a 11): * Peça ACCESS_FINE_LOCATION. Sem isso, o startDiscovery() do Bluetooth retornará vazio.
 
-                // Imprime usando o motor Raw (Byte a Byte)
-                RawImagePrinter.printBitmapDirectly(connection = conn, bitmap = bitmap, centered = true)
-                
-                // Libera RAM
-                bitmap.recycle()
-                
-                promise.resolve(mapOf("success" to true, "message" to "Imagem impressa via RawBytes"))
-                
-            } catch (e: Exception) {
-                Log.e(TAG, "Erro na Rota de Imagem: ${e.message}")
-                promise.reject("IMAGE_ERROR", e.message, e)
-            }
-        }
+Se SDK_INT >= 31 (Android 12, 13, 14+):
 
-        // ==========================================
-        // ROTA 2: IMPRESSÃO DE TEXTOS E TEMPLATES ESC/POS
-        // ==========================================
-        AsyncFunction("printText") { textTemplate: String, options: Map<String, Any>, promise: Promise ->
-            try {
-                // 1. Garante a conexão e cria o manipulador de texto da DantSu
-                val conn = ensureConnection() ?: throw Exception("Falha ao abrir conexão com a impressora")
-                
-                val paperWidth = (options["paperWidth"] as? Int) ?: 58
-                // Lembrete: 32 caracteres para 58mm, 48 caracteres para 80mm
-                val charsPerLine = if (paperWidth == 58) 32 else 48 
-                
-                if (textPrinter == null) {
-                    textPrinter = EscPosPrinter(conn, DEFAULT_DPI, DEFAULT_WIDTH_MM, charsPerLine)
-                }
+Não peça localização.
 
-                // 2. Imprime o texto puro (Tags como [C], [L], <font> funcionam aqui)
-                textPrinter?.printFormattedText(textTemplate)
-                
-                // 3. Força a saída do buffer
-                conn.send()
+Peça BLUETOOTH_SCAN e BLUETOOTH_CONNECT.
 
-                promise.resolve(mapOf("success" to true, "message" to "Texto impresso com sucesso"))
-                
-            } catch (e: Exception) {
-                Log.e(TAG, "Erro na Rota de Texto: ${e.message}")
-                promise.reject("TEXT_ERROR", e.message, e)
-            }
-        }
-
-        // ... (Mantenha as suas funções de getPairedPrinters, connect e disconnect aqui) ...
-    }
-
-    /**
-     * Gerenciador de ciclo de vida da conexão.
-     * Retorna a conexão viva ou tenta auto-conectar.
-     */
-    private fun ensureConnection(): DeviceConnection? {
-        if (currentConnection?.isConnected == true) {
-            return currentConnection
-        }
-        
-        // Se caiu aqui, o socket está fechado. Chama sua lógica de busca e tenta conectar.
-        // Ocultado aqui para brevidade, mas é o seu código de (findAnyAvailablePrinter + connect)
-        // ...
-        
-        return currentConnection
-    }
+Exemplo de lógica (Pseudo-código):
+JavaScript
+if (Platform.Version >= 31) {
+  // Pede BLUETOOTH_SCAN e CONNECT
+} else {
+  // Pede ACCESS_FINE_LOCATION
 }
-O que mudou e por que isso é excelente para o seu sistema?
-Morte ao PrinterTextParserImg: Na Rota 1 (printImage), nós removemos completamente o código antigo da biblioteca DantSu que tentava formatar imagens em Hexadecimal. Nós chamamos diretamente a sua classe RawImagePrinter.printBitmapDirectly().
+Resumo das mudanças para Impressoras:
+Bluetooth Connect: No Android 12+, se você não pedir BLUETOOTH_CONNECT, o app crasha ao tentar parear ou enviar dados para a impressora.
 
-DantSu apenas para Textos: Na Rota 2 (printText), mantivemos o EscPosPrinter da DantSu. Ele continua sendo excelente para alinhar textos, imprimir código de barras e negrito. Mas ele não toca mais em imagens.
+Queries: Sua seção <queries> está boa para links HTTPS, mas se você for usar algum app de terceiros para gerenciar a impressão (como o Print Service do fabricante), talvez precise adicionar o pacote dele lá.
 
-Memória Salva: O fluxo de imagem agora limpa o bitmap.recycle() imediatamente após o envio do Array de Bits, impedindo vazamentos de memória na maquininha.
+Você está usando React Native/Expo (notei pelas meta-datas)? Se sim, você está usando o expo-dev-client para rodar esse Manifest customizado?
 
-Se você quiser testar as suas fatias de imagem de novo agora (daquele recibo grandão do React Native gerado pelo ViewShot), você simplesmente chama o printImage. Como ele agora usa o seu motor de Bits (GS v 0), a imagem tem 99% de chance de sair completamente alinhada e nítida.
+Disse
+nao e mais facil pedir localizacao sempre e se for android 12 ou mais pedir alem da localizacao mais permisoes ? nao facilita a logica ?
 
-O código está limpo, cada arquivo faz apenas uma coisa. O que você acha dessa separação?
+O Gemini disse
+Entendo perfeitamente o seu raciocínio. Do ponto de vista de "código", parece muito mais simples pedir tudo de uma vez. No entanto, para o Android 12 (API 31) em diante, o Google mudou as regras justamente para evitar que os apps fiquem pedindo a localização do usuário sem necessidade real.
+
+Embora pareça facilitar a lógica, pedir a localização no Android 12+ para usar Bluetooth traz três problemas principais:
+
+1. A Experiência do Usuário (UX) e Privacidade
+Se você pedir a localização no Android 12+, o sistema exibirá aquela caixa de diálogo perguntando se o usuário permite a localização "Precisa" ou "Aproximada". Muitos usuários negam permissão de localização por medo de serem monitorados.
+Ao usar as novas permissões (BLUETOOTH_SCAN com neverForLocation), o Android avisa ao usuário que o app quer apenas "encontrar dispositivos próximos", o que passa muito mais confiança.
+
+2. O GPS precisa estar ligado
+Se você basear sua lógica na Localização (estilo antigo):
+
+O usuário é obrigado a manter o GPS (serviço de localização) do celular ligado nas configurações rápidas. Se o GPS estiver desligado, o scan do Bluetooth não retorna nada.
+
+Se você usar a lógica do Android 12+ (estilo novo):
+
+O Bluetooth funciona para achar a impressora mesmo se o GPS do celular estiver desligado, desde que o Bluetooth esteja ativo. Isso reduz drasticamente o suporte técnico com clientes dizendo que "o app não acha a impressora".
+
+3. Rejeição na Play Store
+O Google está cada vez mais rigoroso. Se o seu app pede ACCESS_FINE_LOCATION mas a única funcionalidade dele é imprimir, eles podem questionar por que você precisa rastrear o usuário. Usar as permissões específicas de Bluetooth mostra que seu app segue as "boas práticas" de privacidade.
+
+Como ficaria a lógica "Facilitada" (O meio termo)
+Para não complicar o seu código, você pode criar uma função simples de "Check de Permissões". Veja como a lógica fica limpa:
+
+No Manifest
+Mantenha as permissões com os filtros de versão que te passei anteriormente. O Android vai ignorar o que não for para a versão dele.
+
+No Código (Exemplo em lógica simples)
+Você não precisa de 50 ifs. Você só precisa de dois blocos:
+
+JavaScript
+async function pedirPermissoesDeImpressao() {
+  if (Platform.Version <= 30) {
+    // Lógica para Android 11, 10, 9, 8, 7
+    // Aqui a localização é OBRIGATÓRIA para o Bluetooth funcionar
+    await solicitar(['ACCESS_FINE_LOCATION', 'BLUETOOTH', 'BLUETOOTH_ADMIN']);
+  } else {
+    // Lógica para Android 12, 13, 14+
+    // Aqui a localização NÃO é necessária. Pedimos apenas o essencial.
+    await solicitar(['BLUETOOTH_SCAN', 'BLUETOOTH_CONNECT']);
+  }
+}
+Resumo: Por que não pedir localização sempre?
+No Android 12+, se você pedir localização e o usuário aceitar, o Bluetooth funciona. Mas, se o usuário estiver com o GPS (botão de localização do sistema) desligado, a busca da impressora vai falhar e o seu app vai parecer quebrado. Com as permissões novas, ele funciona independente do GPS.
+
+Dica Extra: Como você mencionou que está em São José do Belmonte e provavelmente desenvolvendo sistemas que podem ser usados em campo ou em prefeituras, economizar bateria e evitar que o usuário tenha que ativar o GPS é um grande diferencial de usabilidade.
+
+Gostaria que eu te ajudasse a montar essa função de verificação de permissões específica para a tecnologia que você está usando (React Native, Java ou Flutter)?
+
+Disse
+eu nao tenho esse problema pois sera para meus vendedores e nao ira par aplay store mas entendo a necessidde de ter o gps ligado isso e um problema pois pode comer a bateria dos vendedores
+
+O Gemini disse
+Entendido! Como o app é para uso interno dos seus vendedores (distribuição via APK ou MDM), você tem mais liberdade, mas o ponto da bateria e da praticidade é o que realmente ganha o jogo aqui.
+
+Se você forçar o uso da localização (GPS) em todos os aparelhos, os vendedores terão que carregar o celular com mais frequência e, se alguém esquecer o GPS desligado, vai te ligar dizendo que "a impressora estragou".
+
+Para facilitar sua vida e proteger a bateria deles, o ideal é que o seu código se comporte de duas formas, dependendo apenas de uma "chave" (a versão do Android).
+
+A Lógica Ideal (Focada em Bateria e Estabilidade)
+Você pode centralizar tudo em uma única função. Assim, o vendedor no Android 9 terá o GPS ligado (porque é o único jeito), mas o vendedor com um celular novo (Android 12+) terá o GPS desligado e economizará bateria.
+
+JavaScript
+// Exemplo de lógica para simplificar sua vida
+async function prepararConexaoImpressora() {
+  if (Platform.OS === 'android') {
+    const apiLevel = Platform.Version;
+
+    if (apiLevel >= 31) {
+      // ANDROID 12 OU SUPERIOR
+      // Não precisa de GPS! Economiza bateria.
+      return await pedirPermissoes(['BLUETOOTH_SCAN', 'BLUETOOTH_CONNECT']);
+    } else {
+      // ANDROID 7 ATÉ 11
+      // Infelizmente o Android exige GPS para ver o Bluetooth aqui
+      return await pedirPermissoes(['ACCESS_FINE_LOCATION']);
+    }
+  }
+}
+Por que isso é melhor para seus vendedores?
+Economia de Energia: No Android 12+, o hardware de rádio do GPS ficará em repouso. O impacto na bateria ao longo de um dia de vendas (8h às 18h) é notável.
+
+Menos Suporte Técnico: Você não precisará ensinar o vendedor a ativar o ícone do "alfinete" (GPS) na barra de tarefas se ele tiver um celular moderno.
+
+Conectividade Direta: Ao usar BLUETOOTH_CONNECT, a comunicação com a impressora térmica é muito mais estável nas versões novas do Android.
+
+O que manter no seu Manifest:
+Mantenha aquela estrutura que conversamos, pois ela é "inteligente". O Android lê o arquivo e diz: "Opa, eu sou Android 13, então vou ignorar essa linha de localização que tem maxSdkVersion=30 e vou focar nas permissões de Bluetooth novas".
+
+XML
+<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30"/>
+
+<uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation" />
+<uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+Dica de "quem conhece o trecho":
+Como seus vendedores estão na rua, outra coisa que consome muita bateria é o app ficar escaneando o Bluetooth o tempo todo. Garanta que seu código dê um stopScan() assim que encontrar a impressora ou após uns 10 segundos de busca.

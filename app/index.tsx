@@ -53,10 +53,21 @@ export default function PDVScreen() {
     try {
       const androidVersion = Platform.Version;
       
+      // 🔍 DEBUG: Mostra versão detectada
+      console.log('═══════════════════════════════════════');
+      console.log('🔍 [DEBUG] Platform.OS:', Platform.OS);
+      console.log('🔍 [DEBUG] Platform.Version:', androidVersion);
+      console.log('🔍 [DEBUG] Tipo:', typeof androidVersion);
+      console.log('🔍 [DEBUG] androidVersion >= 31?', androidVersion >= 31);
+      console.log('═══════════════════════════════════════');
+      
       // Android 12+ (API 31+): BLUETOOTH_SCAN + BLUETOOTH_CONNECT
-      // NÃO precisa de localização se usar neverForLocation no Manifest
+      // NÃO precisa de localização (maxSdkVersion=30 no Manifest)
       if (androidVersion >= 31) {
-        console.log('[Permissions] Android 12+ detectado - Solicitando BLUETOOTH_SCAN e BLUETOOTH_CONNECT');
+        console.log('✅ [Permissions] Android 12+ detectado (API ' + androidVersion + ')');
+        console.log('📋 [Permissions] Solicitando BLUETOOTH_SCAN e BLUETOOTH_CONNECT');
+        console.log('🚫 [Permissions] Localização NÃO será pedida (maxSdkVersion=30 no Manifest)');
+        
         const granted = await PermissionsAndroid.requestMultiple([
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
           PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
@@ -65,25 +76,45 @@ export default function PDVScreen() {
         const scanGranted = granted['android.permission.BLUETOOTH_SCAN'] === PermissionsAndroid.RESULTS.GRANTED;
         const connectGranted = granted['android.permission.BLUETOOTH_CONNECT'] === PermissionsAndroid.RESULTS.GRANTED;
         
-        console.log('[Permissions] BLUETOOTH_SCAN:', scanGranted);
-        console.log('[Permissions] BLUETOOTH_CONNECT:', connectGranted);
+        console.log('📊 [Permissions] Resultado BLUETOOTH_SCAN:', scanGranted);
+        console.log('📊 [Permissions] Resultado BLUETOOTH_CONNECT:', connectGranted);
+        
+        if (!scanGranted || !connectGranted) {
+          console.error('❌ [Permissions] Permissões Bluetooth negadas!');
+          Alert.alert(
+            'Permissões Bluetooth Necessárias',
+            'O app precisa de permissão para buscar e conectar a dispositivos Bluetooth próximos.\n\nVá em Configurações > Apps > PDV > Permissões e ative Bluetooth.',
+            [{ text: 'OK' }]
+          );
+        }
         
         return scanGranted && connectGranted;
       } 
       // Android 7-11 (API 24-30): ACCESS_COARSE_LOCATION
       else {
-        console.log('[Permissions] Android 7-11 detectado - Solicitando ACCESS_COARSE_LOCATION');
+        console.log('✅ [Permissions] Android 7-11 detectado (API ' + androidVersion + ')');
+        console.log('📋 [Permissions] Solicitando ACCESS_COARSE_LOCATION');
+        
         const granted = await PermissionsAndroid.request(
           PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION
         );
         
         const locationGranted = granted === PermissionsAndroid.RESULTS.GRANTED;
-        console.log('[Permissions] ACCESS_COARSE_LOCATION:', locationGranted);
+        console.log('📊 [Permissions] Resultado ACCESS_COARSE_LOCATION:', locationGranted);
+        
+        if (!locationGranted) {
+          console.error('❌ [Permissions] Permissão de localização negada!');
+          Alert.alert(
+            'Permissão Necessária',
+            'O app precisa de permissão de localização para buscar dispositivos Bluetooth (Android 7-11).',
+            [{ text: 'OK' }]
+          );
+        }
         
         return locationGranted;
       }
     } catch (err) {
-      console.error('[Permissions] Erro ao solicitar permissões:', err);
+      console.error('❌ [Permissions] Erro ao solicitar permissões:', err);
       return false;
     }
   };
@@ -263,6 +294,12 @@ export default function PDVScreen() {
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>🖨️ PDV - Cupom Fiscal</Text>
+        
+        {/* Display da versão Android para debug */}
+        <Text style={styles.androidVersion}>
+          📱 Android API {Platform.Version} {Number(Platform.Version) >= 31 ? '(12+)' : '(7-11)'}
+        </Text>
+        
         {connectedPrinter && (
           <Text style={styles.headerSubtitle}>✓ {connectedPrinter}</Text>
         )}
@@ -435,6 +472,17 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#e0e0e0',
     marginTop: 5,
+  },
+  androidVersion: {
+    fontSize: 12,
+    color: '#FFD700',
+    marginTop: 8,
+    fontWeight: '600',
+    backgroundColor: 'rgba(255, 215, 0, 0.2)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 4,
+    alignSelf: 'flex-start',
   },
   content: {
     flex: 1,

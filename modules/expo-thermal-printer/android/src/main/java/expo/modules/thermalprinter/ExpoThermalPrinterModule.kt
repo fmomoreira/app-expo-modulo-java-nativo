@@ -207,12 +207,34 @@ class ExpoThermalPrinterModule : Module() {
          */
         AsyncFunction("getPairedPrinters") { promise: Promise ->
             try {
-                Log.d(TAG, "Buscando impressoras disponíveis...")
+                Log.d(TAG, "═══════════════════════════════════════")
+                Log.d(TAG, "🔍 Buscando impressoras disponíveis...")
+                Log.d(TAG, "🔍 Android SDK: ${Build.VERSION.SDK_INT}")
+                Log.d(TAG, "═══════════════════════════════════════")
+                
                 val printersList = mutableListOf<Map<String, String>>()
                 
                 // 1. Buscar impressoras Bluetooth
                 try {
-                    Log.d(TAG, "Verificando impressoras Bluetooth...")
+                    Log.d(TAG, "📡 Verificando impressoras Bluetooth...")
+                    
+                    // Verificar permissões Bluetooth
+                    val context = appContext.reactContext
+                    if (context != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        val hasScan = context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_SCAN) == 
+                                     android.content.pm.PackageManager.PERMISSION_GRANTED
+                        val hasConnect = context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) == 
+                                        android.content.pm.PackageManager.PERMISSION_GRANTED
+                        
+                        Log.d(TAG, "🔐 [Android 12+] BLUETOOTH_SCAN: $hasScan")
+                        Log.d(TAG, "🔐 [Android 12+] BLUETOOTH_CONNECT: $hasConnect")
+                        
+                        if (!hasScan || !hasConnect) {
+                            Log.e(TAG, "❌ Permissões Bluetooth não concedidas! Peça ao usuário para conceder.")
+                            promise.reject("PERMISSION_DENIED", "Permissões Bluetooth não concedidas", null)
+                            return@AsyncFunction
+                        }
+                    }
                     
                     // Verificar se Bluetooth está habilitado
                     val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
@@ -221,9 +243,9 @@ class ExpoThermalPrinterModule : Module() {
                     } else if (!bluetoothAdapter.isEnabled) {
                         Log.w(TAG, "⚠️ Bluetooth está DESLIGADO. Peça ao usuário para ligar.")
                     } else {
-                        Log.d(TAG, "✓ Bluetooth está LIGADO")
+                        Log.d(TAG, "✅ Bluetooth está LIGADO")
                         val bondedDevices = bluetoothAdapter.bondedDevices
-                        Log.d(TAG, "Dispositivos pareados: ${bondedDevices?.size ?: 0}")
+                        Log.d(TAG, "📱 Dispositivos pareados: ${bondedDevices?.size ?: 0}")
                         
                         // CORREÇÃO: Listar TODOS os dispositivos pareados diretamente
                         // A biblioteca DantSu filtra demais e não detecta InnerPrinter

@@ -61,13 +61,14 @@ object LotteryTicketPrinter {
             ticketData.booklets.forEachIndexed { index, booklet ->
                 Log.d(TAG, "Imprimindo talão ${index + 1}/${ticketData.booklets.size}")
                 val bytes = generateTicketBytes(ticketData, booklet, index, ticketData.booklets.size)
-                connection.outputStream.write(bytes)
-                connection.send()
+                connection.write(bytes)
                 Thread.sleep(300)
             }
             
+            connection.send()
+            
             val feedCmd = byteArrayOf(0x1B, 0x64, 0x04)
-            connection.outputStream.write(feedCmd)
+            connection.write(feedCmd)
             connection.send()
             
             Log.d(TAG, "✓ Todos os bilhetes impressos com sucesso!")

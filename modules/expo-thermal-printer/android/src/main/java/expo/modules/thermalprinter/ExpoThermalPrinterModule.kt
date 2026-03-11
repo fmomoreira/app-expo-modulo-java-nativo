@@ -660,6 +660,65 @@ class ExpoThermalPrinterModule : Module() {
         }
         
         /**
+         * Imprime bilhetes da loteria Reino da Sorte
+         * 
+         * @param ticketData Dados completos do bilhete com todos os talões
+         * @param options Opções de impressão (paperWidth, encoding)
+         * @param promise Promise para retornar resultado
+         */
+        AsyncFunction("printLotteryTicket") { ticketData: Map<String, Any>, options: Map<String, Any>, promise: Promise ->
+            try {
+                Log.d(TAG, "=== IMPRESSÃO DE BILHETE REINO DA SORTE ===")
+                
+                val conn = ensureConnection() ?: throw Exception("Falha ao conectar com a impressora")
+                
+                val extraPrizes = (ticketData["extraPrizeValue"] as? List<Map<String, Any>>)?.map { extra ->
+                    LotteryTicketPrinter.ExtraPrize(
+                        titulo = extra["titulo"] as? String ?: "",
+                        valor = extra["valor"] as? String ?: ""
+                    )
+                } ?: emptyList()
+                
+                val booklets = (ticketData["booklets"] as? List<Map<String, Any>>)?.map { booklet ->
+                    LotteryTicketPrinter.Booklet(
+                        bookletNumber = (booklet["bookletNumber"] as? Number)?.toInt() ?: 0,
+                        lotNumber = (booklet["lotNumber"] as? Number)?.toInt() ?: 0,
+                        tickets = (booklet["tickets"] as? List<String>) ?: emptyList()
+                    )
+                } ?: emptyList()
+                
+                val ticket = LotteryTicketPrinter.TicketData(
+                    id = ticketData["id"] as? String ?: "",
+                    customerName = ticketData["customerName"] as? String ?: "",
+                    customerPhone = ticketData["customerPhone"] as? String ?: "",
+                    sellerName = ticketData["sellerName"] as? String ?: "",
+                    sellerPhone = ticketData["sellerPhone"] as? String ?: "",
+                    drawTitle = ticketData["drawTitle"] as? String ?: "",
+                    drawDate = ticketData["drawDate"] as? String ?: "",
+                    mainPrizeValue = ticketData["mainPrizeValue"] as? String ?: "",
+                    extraPrizeValue = extraPrizes,
+                    createdAt = ticketData["createdAt"] as? String ?: "",
+                    booklets = booklets
+                )
+                
+                Log.d(TAG, "Dados do bilhete: ID=${ticket.id}, Talões=${ticket.booklets.size}")
+                
+                LotteryTicketPrinter.printAllBooklets(conn, ticket)
+                
+                promise.resolve(
+                    mapOf(
+                        "success" to true,
+                        "message" to "Bilhetes impressos com sucesso! (${ticket.booklets.size} talões)"
+                    )
+                )
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Erro ao imprimir bilhete da loteria: ${e.message}", e)
+                promise.reject("LOTTERY_TICKET_ERROR", e.message ?: "Erro ao imprimir bilhete", e)
+            }
+        }
+        
+        /**
          * Desconecta da impressora atual
          * 
          * @param promise Promise para retornar resultado

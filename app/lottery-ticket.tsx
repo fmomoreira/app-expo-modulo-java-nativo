@@ -69,7 +69,7 @@ const SAMPLE_TICKET_DATA: LotteryTicketData = {
   ]
 };
 
-export default function ReinoSorteScreen() {
+export default function LotteryTicketScreen() {
   const [loading, setLoading] = useState(false);
   const [printers, setPrinters] = useState<PrinterDevice[]>([]);
   const [connectedPrinter, setConnectedPrinter] = useState<string | null>(null);
@@ -155,64 +155,121 @@ export default function ReinoSorteScreen() {
         </Text>
         
         {connectedPrinter && (
-          <Text style={styles.connectedText}>✓ Conectado: {connectedPrinter}</Text>
+          <Text style={styles.connectedText}>✓ {connectedPrinter}</Text>
         )}
       </View>
 
       <ScrollView style={styles.content}>
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>📡 Conectar Impressora</Text>
-          
-          <TouchableOpacity
-            style={styles.button}
-            onPress={handleGetPrinters}
-            disabled={loading}
-          >
-            <Text style={styles.buttonText}>
-              {loading ? 'Buscando...' : '🔍 Buscar Impressoras'}
-            </Text>
-          </TouchableOpacity>
+        {!connectedPrinter && (
+          <View style={styles.section}>
+            <Text style={styles.sectionTitle}>📡 Conectar Impressora</Text>
+            
+            <TouchableOpacity
+              style={styles.button}
+              onPress={handleGetPrinters}
+              disabled={loading}
+            >
+              <Text style={styles.buttonText}>
+                {loading ? 'Buscando...' : '🔍 Buscar Impressoras'}
+              </Text>
+            </TouchableOpacity>
 
-          {printers.length > 0 && (
-            <View style={styles.printerList}>
-              {printers.map((printer, index) => (
-                <TouchableOpacity
-                  key={index}
-                  style={styles.printerItem}
-                  onPress={() => handleConnectPrinter(printer.address, printer.name)}
-                  disabled={loading}
-                >
-                  <Text style={styles.printerName}>{printer.name}</Text>
-                  <Text style={styles.printerAddress}>{printer.address}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-        </View>
+            {printers.length > 0 && (
+              <View style={styles.printerList}>
+                {printers.map((printer, index) => (
+                  <TouchableOpacity
+                    key={index}
+                    style={styles.printerItem}
+                    onPress={() => handleConnectPrinter(printer.address, printer.name)}
+                    disabled={loading}
+                  >
+                    <Text style={styles.printerName}>{printer.name}</Text>
+                    <Text style={styles.printerAddress}>{printer.address}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            )}
+          </View>
+        )}
 
         {connectedPrinter && (
           <>
             <View style={styles.section}>
-              <Text style={styles.sectionTitle}>🖨️ Imprimir Bilhete</Text>
+              <Text style={styles.sectionTitle}>🎫 Dados do Bilhete</Text>
               
-              <TouchableOpacity
-                style={[styles.button, styles.printButton]}
-                onPress={handlePrintLotteryTicket}
-                disabled={loading}
-              >
-                <Text style={styles.buttonText}>
-                  {loading ? 'Imprimindo...' : '🎫 IMPRIMIR BILHETE REINO DA SORTE'}
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.button, styles.disconnectButton]}
-                onPress={handleDisconnect}
-                disabled={loading}
-              >
-                <Text style={styles.buttonText}>🔌 Desconectar Impressora</Text>
-              </TouchableOpacity>
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>ID Venda:</Text>
+                <Text style={styles.infoValue}>{SAMPLE_TICKET_DATA.id}</Text>
+              </View>
+              
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Cliente:</Text>
+                <Text style={styles.infoValue}>{SAMPLE_TICKET_DATA.customerName}</Text>
+              </View>
+              
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Telefone:</Text>
+                <Text style={styles.infoValue}>{SAMPLE_TICKET_DATA.customerPhone}</Text>
+              </View>
+              
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Sorteio:</Text>
+                <Text style={styles.infoValue}>{SAMPLE_TICKET_DATA.drawTitle}</Text>
+              </View>
+              
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Prêmio Principal:</Text>
+                <Text style={styles.infoValue}>R$ {SAMPLE_TICKET_DATA.mainPrizeValue}</Text>
+              </View>
+              
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Talões:</Text>
+                <Text style={styles.infoValue}>{SAMPLE_TICKET_DATA.quantityBooklets}</Text>
+              </View>
+              
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Total de Números:</Text>
+                <Text style={styles.infoValue}>{SAMPLE_TICKET_DATA.totalTickets}</Text>
+              </View>
+              
+              <View style={styles.infoRow}>
+                <Text style={styles.infoLabel}>Valor Total:</Text>
+                <Text style={styles.infoValue}>R$ {SAMPLE_TICKET_DATA.totalAmount}</Text>
+              </View>
             </View>
+
+            <View style={styles.section}>
+              <Text style={styles.sectionTitle}>📋 Talões</Text>
+              
+              {SAMPLE_TICKET_DATA.booklets.map((booklet, index) => (
+                <View key={index} style={styles.bookletCard}>
+                  <Text style={styles.bookletTitle}>
+                    Talão {index + 1} - #{booklet.bookletNumber}-{booklet.lotNumber}
+                  </Text>
+                  <Text style={styles.bookletInfo}>
+                    {booklet.tickets.length} números da sorte
+                  </Text>
+                </View>
+              ))}
+            </View>
+
+            <TouchableOpacity
+              style={[styles.button, styles.printButton]}
+              onPress={handlePrintLotteryTicket}
+              disabled={loading}
+            >
+              <Text style={styles.buttonText}>
+                {loading ? 'Imprimindo...' : '🖨️ IMPRIMIR BILHETES'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.button, styles.disconnectButton]}
+              onPress={handleDisconnect}
+              disabled={loading}
+            >
+              <Text style={styles.buttonText}>🔌 Desconectar Impressora</Text>
+            </TouchableOpacity>
           </>
         )}
       </ScrollView>
@@ -240,12 +297,12 @@ const styles = StyleSheet.create({
     borderBottomColor: '#FFD700',
   },
   headerTitle: {
-    fontSize: 32,
+    fontSize: 28,
     fontWeight: 'bold',
     color: '#FFD700',
   },
   headerSubtitle: {
-    fontSize: 18,
+    fontSize: 16,
     color: '#e0e0e0',
     marginTop: 5,
   },
@@ -272,20 +329,20 @@ const styles = StyleSheet.create({
   section: {
     backgroundColor: '#16213e',
     margin: 15,
-    padding: 20,
+    padding: 15,
     borderRadius: 10,
-    borderWidth: 2,
+    borderWidth: 1,
     borderColor: '#FFD700',
   },
   sectionTitle: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: '600',
     marginBottom: 15,
     color: '#FFD700',
   },
   button: {
     backgroundColor: '#0f3460',
-    padding: 18,
+    padding: 15,
     borderRadius: 8,
     alignItems: 'center',
     marginTop: 10,
@@ -294,11 +351,14 @@ const styles = StyleSheet.create({
   },
   printButton: {
     backgroundColor: '#e94560',
-    paddingVertical: 20,
+    marginHorizontal: 15,
+    marginTop: 10,
   },
   disconnectButton: {
     backgroundColor: '#533483',
+    marginHorizontal: 15,
     marginTop: 10,
+    marginBottom: 20,
   },
   buttonText: {
     color: '#fff',
@@ -310,10 +370,10 @@ const styles = StyleSheet.create({
   },
   printerItem: {
     backgroundColor: '#0f3460',
-    padding: 15,
+    padding: 12,
     borderRadius: 6,
-    marginBottom: 10,
-    borderLeftWidth: 4,
+    marginBottom: 8,
+    borderLeftWidth: 3,
     borderLeftColor: '#FFD700',
   },
   printerName: {
@@ -323,6 +383,41 @@ const styles = StyleSheet.create({
   },
   printerAddress: {
     fontSize: 12,
+    color: '#a0a0a0',
+    marginTop: 4,
+  },
+  infoRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#0f3460',
+  },
+  infoLabel: {
+    fontSize: 14,
+    color: '#a0a0a0',
+    fontWeight: '500',
+  },
+  infoValue: {
+    fontSize: 14,
+    color: '#fff',
+    fontWeight: '600',
+  },
+  bookletCard: {
+    backgroundColor: '#0f3460',
+    padding: 12,
+    borderRadius: 6,
+    marginBottom: 10,
+    borderLeftWidth: 3,
+    borderLeftColor: '#4ade80',
+  },
+  bookletTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#FFD700',
+  },
+  bookletInfo: {
+    fontSize: 14,
     color: '#a0a0a0',
     marginTop: 4,
   },

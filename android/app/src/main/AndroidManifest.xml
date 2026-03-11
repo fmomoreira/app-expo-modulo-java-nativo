@@ -5,7 +5,7 @@
   
   <!-- Localização APENAS para Android 7-11 (API 24-30) -->
   <!-- maxSdkVersion=30 = NÃO pede no Android 12+ -->
-  <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"
+  <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"
                    android:maxSdkVersion="30"/>
   
   <!-- Permissões Bluetooth para Android 12+ (API 31+) -->

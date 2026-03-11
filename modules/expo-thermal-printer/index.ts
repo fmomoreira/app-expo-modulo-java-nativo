@@ -134,4 +134,22 @@ export async function printReceipt(
   });
 }
 
+/**
+ * Print a lottery ticket (Reino da Sorte) with all booklets
+ * @param ticketData - Complete lottery ticket data with booklets
+ * @param options - Print options (paperWidth, encoding)
+ * @returns Promise with print result
+ */
+export async function printLotteryTicket(
+  ticketData: any,
+  options?: { paperWidth?: 58 | 80; encoding?: string }
+): Promise<PrintResult> {
+  return await ExpoThermalPrinterModule.printLotteryTicket(ticketData, {
+    paperWidth: options?.paperWidth || 58,
+    encoding: options?.encoding || 'ISO-8859-1',
+  });
+}
+
+export * from './types';
 export { ExpoThermalPrinterModule };
+

@@ -1,21 +1,21 @@
 import React, { useState } from 'react';
 import {
-  View,
+  ActivityIndicator,
+  Alert,
+  Platform,
+  ScrollView,
+  StyleSheet,
   Text,
   TouchableOpacity,
-  StyleSheet,
-  ScrollView,
-  Alert,
-  ActivityIndicator,
-  Platform,
+  View,
 } from 'react-native';
 import {
-  getPairedPrinters,
   connectPrinter,
   disconnectPrinter,
-  printLotteryTicket,
-  PrinterDevice,
+  getPairedPrinters,
   LotteryTicketData,
+  PrinterDevice,
+  printLotteryTicket,
 } from '../modules/expo-thermal-printer';
 
 const SAMPLE_TICKET_DATA: LotteryTicketData = {
@@ -66,7 +66,8 @@ const SAMPLE_TICKET_DATA: LotteryTicketData = {
         "007409-2", "007461-2", "007483-2", "007701-2", "007902-2"
       ]
     }
-  ]
+  ],
+  urlSorteio: "https://reinodasorte.com.br"
 };
 
 export default function ReinoSorteScreen() {

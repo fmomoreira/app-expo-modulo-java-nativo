@@ -28,6 +28,7 @@ export interface LotteryTicketData {
   paymentMethod: string;
   createdAt: string;
   booklets: Booklet[];
+  urlSorteio?: string;
 }
 
 export interface PrintLotteryTicketOptions {

@@ -698,7 +698,8 @@ class ExpoThermalPrinterModule : Module() {
                     mainPrizeValue = ticketData["mainPrizeValue"] as? String ?: "",
                     extraPrizeValue = extraPrizes,
                     createdAt = ticketData["createdAt"] as? String ?: "",
-                    booklets = booklets
+                    booklets = booklets,
+                    urlSorteio = ticketData["urlSorteio"] as? String
                 )
                 
                 Log.d(TAG, "Dados do bilhete: ID=${ticket.id}, Talões=${ticket.booklets.size}")

@@ -20,8 +20,8 @@ object LotteryTicketPrinter {
         val LINE_DASH = "--------------------------------\n".toByteArray(Charsets.ISO_8859_1)
         
         val QR_MODEL = byteArrayOf(0x1D, 0x28, 0x6B, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00)
-        val QR_SIZE = byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x43, 0x06)
-        val QR_ERROR_CORR = byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x45, 0x30)
+        val QR_SIZE_MEDIUM = byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x43, 0x06)
+        val QR_ERROR_CORR = byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x45, 0x31)
         val QR_PRINT = byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x51, 0x30)
     }
     
@@ -47,7 +47,8 @@ object LotteryTicketPrinter {
         val mainPrizeValue: String,
         val extraPrizeValue: List<ExtraPrize>?,
         val createdAt: String,
-        val booklets: List<Booklet>
+        val booklets: List<Booklet>,
+        val urlSorteio: String? = null
     )
     
     fun printAllBooklets(
@@ -144,10 +145,11 @@ object LotteryTicketPrinter {
             output.write(EscPosCommands.LINE_DASH)
             
             output.write(EscPosCommands.ALIGN_CENTER)
-            output.write("Escaneie para validar:\n\n".toByteArray(Charsets.ISO_8859_1))
+            output.write("\nEscaneie para validar:\n\n".toByteArray(Charsets.ISO_8859_1))
             
-            val qrData = "https://reinodasorte.com.br/valida/${ticket.id}/${booklet.bookletNumber}"
+            val qrData = ticket.urlSorteio ?: "https://reinodasorte.com.br/valida/${ticket.id}/${booklet.bookletNumber}"
             output.write(generateQrCodeBytes(qrData))
+            output.write("\n".toByteArray(Charsets.ISO_8859_1))
             
             output.write("\n\nPRAZO P/ GANHADOR SE APRESENTAR\n".toByteArray(Charsets.ISO_8859_1))
             output.write("ATE AS 09H DO DIA SEGUINTE\n".toByteArray(Charsets.ISO_8859_1))
@@ -165,17 +167,37 @@ object LotteryTicketPrinter {
     
     private fun generateQrCodeBytes(data: String): ByteArray {
         val baos = ByteArrayOutputStream()
-        val storeData = data.toByteArray(Charsets.ISO_8859_1)
-        val pL = ((storeData.size + 3) % 256).toByte()
-        val pH = ((storeData.size + 3) / 256).toByte()
         
-        baos.write(EscPosCommands.QR_MODEL)
-        baos.write(EscPosCommands.QR_SIZE)
-        baos.write(EscPosCommands.QR_ERROR_CORR)
-        
-        baos.write(byteArrayOf(0x1D, 0x28, 0x6B, pL, pH, 0x31, 0x50, 0x30))
-        baos.write(storeData)
-        baos.write(EscPosCommands.QR_PRINT)
+        try {
+            val qrData = data.toByteArray(Charsets.ISO_8859_1)
+            val dataLen = qrData.size + 3
+            val pL = (dataLen and 0xFF).toByte()
+            val pH = ((dataLen shr 8) and 0xFF).toByte()
+            
+            Log.d(TAG, "Gerando QR Code para URL: $data")
+            Log.d(TAG, "Tamanho da URL: ${data.length} caracteres, ${qrData.size} bytes")
+            
+            // 1. Selecionar modelo QR Code (Modelo 2)
+            baos.write(byteArrayOf(0x1D, 0x28, 0x6B, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00))
+            
+            // 2. Definir tamanho do módulo (6 = médio, ideal para 58mm com URLs longas)
+            baos.write(byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x43, 0x06))
+            
+            // 3. Definir nível de correção de erro (0x31 = M, 15% de recuperação)
+            baos.write(byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x45, 0x31))
+            
+            // 4. Armazenar dados no símbolo
+            baos.write(byteArrayOf(0x1D, 0x28, 0x6B, pL, pH, 0x31, 0x50, 0x30))
+            baos.write(qrData)
+            
+            // 5. Imprimir o símbolo QR Code
+            baos.write(byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x51, 0x30))
+            
+            Log.d(TAG, "✓ QR Code gerado com sucesso (tamanho módulo: 6)")
+            
+        } catch (e: Exception) {
+            Log.e(TAG, "Erro ao gerar QR code: ${e.message}", e)
+        }
         
         return baos.toByteArray()
     }

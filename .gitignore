@@ -2,7 +2,7 @@
 
 # dependencies
 node_modules/
-
+android
 # Expo
 .expo/
 dist/
@@ -40,4 +40,4 @@ app-example
 
 # generated native folders
 /ios
-/android
+# /android - Comentado para permitir acesso ao AndroidManifest.xml

@@ -207,12 +207,20 @@ class ExpoThermalPrinterModule : Module() {
          */
         AsyncFunction("getPairedPrinters") { promise: Promise ->
             try {
-                Log.d(TAG, "Buscando impressoras disponíveis...")
+                Log.d(TAG, "═══════════════════════════════════════")
+                Log.d(TAG, "🔍 Buscando impressoras disponíveis...")
+                Log.d(TAG, "🔍 Android SDK: ${Build.VERSION.SDK_INT}")
+                Log.d(TAG, "═══════════════════════════════════════")
+                
                 val printersList = mutableListOf<Map<String, String>>()
                 
                 // 1. Buscar impressoras Bluetooth
                 try {
-                    Log.d(TAG, "Verificando impressoras Bluetooth...")
+                    Log.d(TAG, "📡 Verificando impressoras Bluetooth...")
+                    
+                    // Android 7-11: permissao de Localizacao e suficiente para Bluetooth
+                    // Android 12+: sera tratado em versao futura
+                    Log.d(TAG, "� Android SDK: ${Build.VERSION.SDK_INT} - Verificando Bluetooth...")
                     
                     // Verificar se Bluetooth está habilitado
                     val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
@@ -221,9 +229,9 @@ class ExpoThermalPrinterModule : Module() {
                     } else if (!bluetoothAdapter.isEnabled) {
                         Log.w(TAG, "⚠️ Bluetooth está DESLIGADO. Peça ao usuário para ligar.")
                     } else {
-                        Log.d(TAG, "✓ Bluetooth está LIGADO")
+                        Log.d(TAG, "✅ Bluetooth está LIGADO")
                         val bondedDevices = bluetoothAdapter.bondedDevices
-                        Log.d(TAG, "Dispositivos pareados: ${bondedDevices?.size ?: 0}")
+                        Log.d(TAG, "📱 Dispositivos pareados: ${bondedDevices?.size ?: 0}")
                         
                         // CORREÇÃO: Listar TODOS os dispositivos pareados diretamente
                         // A biblioteca DantSu filtra demais e não detecta InnerPrinter
@@ -634,6 +642,66 @@ class ExpoThermalPrinterModule : Module() {
                 promise.reject("TEST_ERROR", e.message ?: "Erro no teste", e)
             } finally {
                 bitmap?.recycle()
+            }
+        }
+        
+        /**
+         * Imprime bilhetes da loteria Reino da Sorte
+         * 
+         * @param ticketData Dados completos do bilhete com todos os talões
+         * @param options Opções de impressão (paperWidth, encoding)
+         * @param promise Promise para retornar resultado
+         */
+        AsyncFunction("printLotteryTicket") { ticketData: Map<String, Any>, options: Map<String, Any>, promise: Promise ->
+            try {
+                Log.d(TAG, "=== IMPRESSÃO DE BILHETE REINO DA SORTE ===")
+                
+                val conn = ensureConnection() ?: throw Exception("Falha ao conectar com a impressora")
+                
+                val extraPrizes = (ticketData["extraPrizeValue"] as? List<Map<String, Any>>)?.map { extra ->
+                    LotteryTicketPrinter.ExtraPrize(
+                        titulo = extra["titulo"] as? String ?: "",
+                        valor = extra["valor"] as? String ?: ""
+                    )
+                } ?: emptyList()
+                
+                val booklets = (ticketData["booklets"] as? List<Map<String, Any>>)?.map { booklet ->
+                    LotteryTicketPrinter.Booklet(
+                        bookletNumber = (booklet["bookletNumber"] as? Number)?.toInt() ?: 0,
+                        lotNumber = (booklet["lotNumber"] as? Number)?.toInt() ?: 0,
+                        tickets = (booklet["tickets"] as? List<String>) ?: emptyList()
+                    )
+                } ?: emptyList()
+                
+                val ticket = LotteryTicketPrinter.TicketData(
+                    id = ticketData["id"] as? String ?: "",
+                    customerName = ticketData["customerName"] as? String ?: "",
+                    customerPhone = ticketData["customerPhone"] as? String ?: "",
+                    sellerName = ticketData["sellerName"] as? String ?: "",
+                    sellerPhone = ticketData["sellerPhone"] as? String ?: "",
+                    drawTitle = ticketData["drawTitle"] as? String ?: "",
+                    drawDate = ticketData["drawDate"] as? String ?: "",
+                    mainPrizeValue = ticketData["mainPrizeValue"] as? String ?: "",
+                    extraPrizeValue = extraPrizes,
+                    createdAt = ticketData["createdAt"] as? String ?: "",
+                    booklets = booklets,
+                    urlSorteio = ticketData["urlSorteio"] as? String
+                )
+                
+                Log.d(TAG, "Dados do bilhete: ID=${ticket.id}, Talões=${ticket.booklets.size}")
+                
+                LotteryTicketPrinter.printAllBooklets(conn, ticket)
+                
+                promise.resolve(
+                    mapOf(
+                        "success" to true,
+                        "message" to "Bilhetes impressos com sucesso! (${ticket.booklets.size} talões)"
+                    )
+                )
+                
+            } catch (e: Exception) {
+                Log.e(TAG, "Erro ao imprimir bilhete da loteria: ${e.message}", e)
+                promise.reject("LOTTERY_TICKET_ERROR", e.message ?: "Erro ao imprimir bilhete", e)
             }
         }
         

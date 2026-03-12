@@ -9,4 +9,4 @@ e a ideia e aajudar na contrucao de um app que imprime etiquetas em impressoras 
 
   a ideia e ter um modulo nativo de impressao javaklotin
 
-  
+  Nao gaste mas tokens contruind documentacao somente se eu pedir se nao altere as informações no codigo de acordo com as tarefas solicitas

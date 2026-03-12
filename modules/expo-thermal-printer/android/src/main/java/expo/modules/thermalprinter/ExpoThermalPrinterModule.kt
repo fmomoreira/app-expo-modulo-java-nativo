@@ -373,6 +373,20 @@ class ExpoThermalPrinterModule : Module() {
                 else {
                     Log.d(TAG, "Buscando impressora Bluetooth...")
                     
+                    // Verificar permissão BLUETOOTH_CONNECT no Android 12+
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                        val context = appContext.reactContext
+                        if (context != null) {
+                            val hasConnect = context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) == 
+                                            android.content.pm.PackageManager.PERMISSION_GRANTED
+                            Log.d(TAG, "🔐 [connectPrinter] BLUETOOTH_CONNECT: $hasConnect")
+                            if (!hasConnect) {
+                                promise.reject("PERMISSION_DENIED", "Permissão BLUETOOTH_CONNECT não concedida. Use o botão de permissões Android 12+ primeiro.", null)
+                                return@AsyncFunction
+                            }
+                        }
+                    }
+                    
                     // Tentar primeiro com a biblioteca DantSu
                     val bluetoothConnections = BluetoothPrintersConnections().list ?: emptyArray()
                     connection = bluetoothConnections.find { it.device.address == address }

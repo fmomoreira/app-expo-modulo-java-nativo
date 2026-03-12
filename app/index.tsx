@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  PermissionsAndroid,
   Platform,
   ScrollView,
   StyleSheet,
@@ -74,6 +75,51 @@ export default function ReinoSorteScreen() {
   const [loading, setLoading] = useState(false);
   const [printers, setPrinters] = useState<PrinterDevice[]>([]);
   const [connectedPrinter, setConnectedPrinter] = useState<string | null>(null);
+
+  const handleRequestPermissionsAndroid7 = async () => {
+    try {
+      const granted = await PermissionsAndroid.requestMultiple([
+        PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
+        PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION,
+      ]);
+      const fine = granted[PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION];
+      const coarse = granted[PermissionsAndroid.PERMISSIONS.ACCESS_COARSE_LOCATION];
+      Alert.alert(
+        'Android 7-11 - Resultado',
+        `ACCESS_FINE_LOCATION: ${fine}\nACCESS_COARSE_LOCATION: ${coarse}`
+      );
+    } catch (error: any) {
+      Alert.alert('Erro', error.message);
+    }
+  };
+
+  const handleRequestPermissionsAndroid12 = async () => {
+    try {
+      const scanAlready = await PermissionsAndroid.check('android.permission.BLUETOOTH_SCAN' as any);
+      const connectAlready = await PermissionsAndroid.check('android.permission.BLUETOOTH_CONNECT' as any);
+
+      if (scanAlready && connectAlready) {
+        Alert.alert(
+          'Android 12+ - Já Concedidas ✅',
+          `BLUETOOTH_SCAN: já concedida\nBLUETOOTH_CONNECT: já concedida\n\nPara testar novamente, revogue em:\nConfigurações → Apps → print-app → Permissões`
+        );
+        return;
+      }
+
+      const granted = await PermissionsAndroid.requestMultiple([
+        'android.permission.BLUETOOTH_SCAN' as any,
+        'android.permission.BLUETOOTH_CONNECT' as any,
+      ]);
+      const scan = granted['android.permission.BLUETOOTH_SCAN'];
+      const connect = granted['android.permission.BLUETOOTH_CONNECT'];
+      Alert.alert(
+        'Android 12+ - Resultado',
+        `BLUETOOTH_SCAN: ${scan}\nBLUETOOTH_CONNECT: ${connect}`
+      );
+    } catch (error: any) {
+      Alert.alert('Erro', error.message);
+    }
+  };
 
   const handleGetPrinters = async () => {
     setLoading(true);
@@ -162,6 +208,27 @@ export default function ReinoSorteScreen() {
 
       <ScrollView style={styles.content}>
         <View style={styles.section}>
+          <Text style={styles.sectionTitle}>🔐 Teste Permissões Bluetooth</Text>
+          <Text style={{ color: '#a0a0a0', marginBottom: 10, fontSize: 13 }}>
+            Android API: {Platform.Version}
+          </Text>
+
+          <TouchableOpacity
+            style={[styles.button, { backgroundColor: '#0ea5e9' }]}
+            onPress={handleRequestPermissionsAndroid7}
+          >
+            <Text style={styles.buttonText}>🔵 Botão 1 - Permissões Android 7-11 (Localização)</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.button, { backgroundColor: '#8b5cf6' }]}
+            onPress={handleRequestPermissionsAndroid12}
+          >
+            <Text style={styles.buttonText}>🟣 Botão 2 - Permissões Android 12+ (Bluetooth)</Text>
+          </TouchableOpacity>
+        </View>
+
+        <View style={styles.section}>
           <Text style={styles.sectionTitle}>📡 Conectar Impressora</Text>
           
           <TouchableOpacity
@@ -244,11 +311,13 @@ const styles = StyleSheet.create({
     fontSize: 32,
     fontWeight: 'bold',
     color: '#FFD700',
+    marginHorizontal: 'auto',
   },
   headerSubtitle: {
     fontSize: 18,
     color: '#e0e0e0',
     marginTop: 5,
+    marginHorizontal: 'auto',
   },
   androidVersion: {
     fontSize: 12,
@@ -260,6 +329,7 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 4,
     alignSelf: 'flex-start',
+    marginHorizontal: 'auto',
   },
   connectedText: {
     fontSize: 14,

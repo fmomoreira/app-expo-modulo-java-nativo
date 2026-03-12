@@ -1,7 +1,12 @@
 package expo.modules.thermalprinter
 
+import android.graphics.Bitmap
+import android.graphics.Color
 import android.util.Log
 import com.dantsu.escposprinter.connection.DeviceConnection
+import com.google.zxing.BarcodeFormat
+import com.google.zxing.EncodeHintType
+import com.google.zxing.qrcode.QRCodeWriter
 import java.io.ByteArrayOutputStream
 import java.text.SimpleDateFormat
 import java.util.*
@@ -18,11 +23,6 @@ object LotteryTicketPrinter {
         val TEXT_X2 = byteArrayOf(0x1D, 0x21, 0x11)
         val TEXT_NORMAL = byteArrayOf(0x1D, 0x21, 0x00)
         val LINE_DASH = "--------------------------------\n".toByteArray(Charsets.ISO_8859_1)
-        
-        val QR_MODEL = byteArrayOf(0x1D, 0x28, 0x6B, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00)
-        val QR_SIZE_MEDIUM = byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x43, 0x06)
-        val QR_ERROR_CORR = byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x45, 0x31)
-        val QR_PRINT = byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x51, 0x30)
     }
     
     data class ExtraPrize(
@@ -166,40 +166,36 @@ object LotteryTicketPrinter {
     }
     
     private fun generateQrCodeBytes(data: String): ByteArray {
-        val baos = ByteArrayOutputStream()
-        
         try {
-            val qrData = data.toByteArray(Charsets.ISO_8859_1)
-            val dataLen = qrData.size + 3
-            val pL = (dataLen and 0xFF).toByte()
-            val pH = ((dataLen shr 8) and 0xFF).toByte()
+            Log.d(TAG, "Gerando QR Code BITMAP para: $data")
             
-            Log.d(TAG, "Gerando QR Code para URL: $data")
-            Log.d(TAG, "Tamanho da URL: ${data.length} caracteres, ${qrData.size} bytes")
+            val qrSize = 200
+            val hints = mapOf(
+                EncodeHintType.MARGIN to 1,
+                EncodeHintType.CHARACTER_SET to "UTF-8"
+            )
             
-            // 1. Selecionar modelo QR Code (Modelo 2)
-            baos.write(byteArrayOf(0x1D, 0x28, 0x6B, 0x04, 0x00, 0x31, 0x41, 0x32, 0x00))
+            val bitMatrix = QRCodeWriter().encode(data, BarcodeFormat.QR_CODE, qrSize, qrSize, hints)
+            val width = bitMatrix.width
+            val height = bitMatrix.height
             
-            // 2. Definir tamanho do módulo (6 = médio, ideal para 58mm com URLs longas)
-            baos.write(byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x43, 0x06))
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            for (y in 0 until height) {
+                for (x in 0 until width) {
+                    bitmap.setPixel(x, y, if (bitMatrix.get(x, y)) Color.BLACK else Color.WHITE)
+                }
+            }
             
-            // 3. Definir nível de correção de erro (0x31 = M, 15% de recuperação)
-            baos.write(byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x45, 0x31))
+            val rawBytes = RawImagePrinter.bitmapToRawBytes(bitmap)
+            bitmap.recycle()
             
-            // 4. Armazenar dados no símbolo
-            baos.write(byteArrayOf(0x1D, 0x28, 0x6B, pL, pH, 0x31, 0x50, 0x30))
-            baos.write(qrData)
-            
-            // 5. Imprimir o símbolo QR Code
-            baos.write(byteArrayOf(0x1D, 0x28, 0x6B, 0x03, 0x00, 0x31, 0x51, 0x30))
-            
-            Log.d(TAG, "✓ QR Code gerado com sucesso (tamanho módulo: 6)")
+            Log.d(TAG, "✓ QR Code bitmap gerado: ${width}x${height}px, ${rawBytes.size} bytes")
+            return rawBytes
             
         } catch (e: Exception) {
-            Log.e(TAG, "Erro ao gerar QR code: ${e.message}", e)
+            Log.e(TAG, "Erro ao gerar QR code bitmap: ${e.message}", e)
+            return ByteArray(0)
         }
-        
-        return baos.toByteArray()
     }
     
     private fun formatCurrency(value: String): String {

@@ -218,23 +218,9 @@ class ExpoThermalPrinterModule : Module() {
                 try {
                     Log.d(TAG, "📡 Verificando impressoras Bluetooth...")
                     
-                    // Verificar permissões Bluetooth
-                    val context = appContext.reactContext
-                    if (context != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        val hasScan = context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_SCAN) == 
-                                     android.content.pm.PackageManager.PERMISSION_GRANTED
-                        val hasConnect = context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) == 
-                                        android.content.pm.PackageManager.PERMISSION_GRANTED
-                        
-                        Log.d(TAG, "🔐 [Android 12+] BLUETOOTH_SCAN: $hasScan")
-                        Log.d(TAG, "🔐 [Android 12+] BLUETOOTH_CONNECT: $hasConnect")
-                        
-                        if (!hasScan || !hasConnect) {
-                            Log.e(TAG, "❌ Permissões Bluetooth não concedidas! Peça ao usuário para conceder.")
-                            promise.reject("PERMISSION_DENIED", "Permissões Bluetooth não concedidas", null)
-                            return@AsyncFunction
-                        }
-                    }
+                    // Android 7-11: permissao de Localizacao e suficiente para Bluetooth
+                    // Android 12+: sera tratado em versao futura
+                    Log.d(TAG, "� Android SDK: ${Build.VERSION.SDK_INT} - Verificando Bluetooth...")
                     
                     // Verificar se Bluetooth está habilitado
                     val bluetoothAdapter = BluetoothAdapter.getDefaultAdapter()
@@ -372,20 +358,6 @@ class ExpoThermalPrinterModule : Module() {
                 // Bluetooth
                 else {
                     Log.d(TAG, "Buscando impressora Bluetooth...")
-                    
-                    // Verificar permissão BLUETOOTH_CONNECT no Android 12+
-                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-                        val context = appContext.reactContext
-                        if (context != null) {
-                            val hasConnect = context.checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT) == 
-                                            android.content.pm.PackageManager.PERMISSION_GRANTED
-                            Log.d(TAG, "🔐 [connectPrinter] BLUETOOTH_CONNECT: $hasConnect")
-                            if (!hasConnect) {
-                                promise.reject("PERMISSION_DENIED", "Permissão BLUETOOTH_CONNECT não concedida. Use o botão de permissões Android 12+ primeiro.", null)
-                                return@AsyncFunction
-                            }
-                        }
-                    }
                     
                     // Tentar primeiro com a biblioteca DantSu
                     val bluetoothConnections = BluetoothPrintersConnections().list ?: emptyArray()

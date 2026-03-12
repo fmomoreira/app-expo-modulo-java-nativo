@@ -1,18 +1,18 @@
-A impressao dos bilhetes esta perfeita nao quero mexer nixo mais nao altere mais nda na impressao dos bilhetes.
+Faça o seguinte agora 
+
+a nova impleemntacao de teste envolve um avanco na impressao 
 
 
-a unica coisa que quero conseguir e usar o app tanto em android 12 ou mais ou android de 7 a 11 
+agora nao teremos mais o botao de buscar impressora, vai ter apenas o botao imprimir bilhete 
 
 
-qual o problema atual, eu consigo usar em android 7 a 11 mas no android 12 como e um permisao que ano existe mais  ele me retonar quando clico no botao Buscar Impressora Permissao Bluetooh nao cocedida 
+ao clicar se tiver a permisao seleciona a primiera impressora(conexao) disponivel e imprime o bilhete
 
-veja no topo da tela que conseguimos imprimr a vesaro do android
-
-
-e se usarmos isso se for 12 ou superior ao clciar no botao pedir as permisoes do android 12 ou superior e cria outro botao que quando clicar pede as permissoes do android 7 a 11 para acessar o bluetooth que no caso do android 7 a 11 e a localizacao neh
+se nao tiver permisao exibe o que precisa exibir para o usario conceder que e as permisao doa ndroid 7 ao 11 foco nisso agora esse app vai ser focado no andorid 7 a 11 
 
 
-isso nao funionaria e no projeto deixamos autorizado solicaitar tudo mais so pedidomso quando clica em cada botao 
+de uma forma que nao rpecise selcionar impressora pois nos aparelhso que ele vai rodar so tem um impressora.
+
+ai ao clicar em imprimir ficara fluido e por debaixo dos panos 
 
 
-se vc fizer uma renderizacao condicional sempre ira solicitar so o que e de cada sistema operacional 
